@@ -1,0 +1,8 @@
+# MWIC Python - 明华读写器纯 Python 实现
+# 依赖包列表
+
+# 串口通信库（必需）
+pyserial>=3.5
+
+# GUI 库（可选，如需运行 GUI 版本）
+# tkinter 通常随 Python 一起安装，无需单独安装
