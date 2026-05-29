@@ -1,9 +1,6 @@
 import ctypes
-import struct
 import time
 import threading
-import subprocess
-import json
 import os
 import sys
 from typing import Optional, Tuple
@@ -15,641 +12,24 @@ from .constants import (
 from .types import CardType, DeviceStatus
 
 
-def _is_32bit_python():
-    return struct.calcsize("P") == 4
-
-
-class _DirectDLLCaller:
-
-    def __init__(self, dll_path: str):
-        self._dll = ctypes.WinDLL(dll_path)
-        self._func_cache = {}
-        self._setup_funcs()
-
-    def _setup_funcs(self):
-        self._dll.ic_init.restype = ctypes.c_long
-        self._dll.ic_init.argtypes = [ctypes.c_int16, ctypes.c_ulong]
-
-        self._dll.ic_exit.restype = ctypes.c_int16
-        self._dll.ic_exit.argtypes = [ctypes.c_long]
-
-        self._dll.dv_beep.restype = ctypes.c_int16
-        self._dll.dv_beep.argtypes = [ctypes.c_long, ctypes.c_int16]
-
-    def _get_func(self, name: str):
-        if name in self._func_cache:
-            return self._func_cache[name]
-        func = getattr(self._dll, name)
-        if name == 'ic_init':
-            func.restype = ctypes.c_long
-            func.argtypes = [ctypes.c_int16, ctypes.c_ulong]
-        elif name == 'ic_exit':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long]
-        elif name == 'dv_beep':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16]
-        elif name in ('get_status', 'get_status0'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.POINTER(ctypes.c_int16)]
-        elif name == 'chk_card':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long]
-        elif name == 'srd_ver':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
-        elif name == 'srd_snr':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
-        elif name == 'chk_baud':
-            func.restype = ctypes.c_int32
-            func.argtypes = [ctypes.c_int16]
-        elif name == 'auto_chk':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long]
-        elif name == 'auto_pull':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long]
-        elif name == 'exp_dis':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int16)]
-        elif name.startswith('chk_'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long]
-        elif name.startswith('srd_24c') or name.startswith('srd_93c'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('swr_24c') or name.startswith('swr_93c'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name == 'prd_4442':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
-        elif name == 'pwr_4442':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('rdwpb_44') or name.startswith('wrwpb_44'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('rsc_44') or name.startswith('wsc_44') or name.startswith('csc_44'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('rsct_44'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.POINTER(ctypes.c_int16)]
-        elif name.startswith('srd_10') or name.startswith('srd_15') or name.startswith('srd_16'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('swr_10') or name.startswith('swr_15') or name.startswith('swr_16'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('srd_44'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('swr_44'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('srd_s50') or name.startswith('srd_s70'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('swr_s50') or name.startswith('swr_s70'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int16]
-        elif name == 'cpu_reset':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
-        elif name == 'cpu_apdu':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_char_p]
-        self._func_cache[name] = func
-        return func
-
-    def call(self, name: str, args: list) -> dict:
-        try:
-            func = self._get_func(name)
-            if name == 'ic_init':
-                result = func(args[0], args[1])
-                return {"result": result}
-            elif name == 'ic_exit':
-                result = func(args[0])
-                return {"result": result}
-            elif name == 'dv_beep':
-                result = func(args[0], args[1])
-                return {"result": result}
-            elif name in ('get_status', 'get_status0'):
-                status = ctypes.c_int16()
-                result = func(args[0], ctypes.byref(status))
-                return {"result": result, "status": status.value}
-            elif name == 'chk_card':
-                result = func(args[0])
-                return {"result": result}
-            elif name == 'srd_ver':
-                length = args[1] if len(args) > 1 else 18
-                buf = ctypes.create_string_buffer(length + 1)
-                result = func(args[0], length, buf)
-                return {"result": result, "data": buf.value.decode('ascii', errors='replace')}
-            elif name == 'srd_snr':
-                length = args[1] if len(args) > 1 else 16
-                buf = ctypes.create_string_buffer(length + 1)
-                result = func(args[0], length, buf)
-                return {"result": result, "data": buf.raw[:length].hex()}
-            elif name == 'chk_baud':
-                result = func(args[0])
-                return {"result": result}
-            elif name == 'auto_chk':
-                result = func(args[0])
-                return {"result": result}
-            elif name == 'auto_pull':
-                result = func(args[0])
-                return {"result": result}
-            elif name == 'exp_dis':
-                card_type = ctypes.c_int16()
-                filename = args[1].encode('ascii', errors='replace') if len(args) > 1 and args[1] else b''
-                result = func(args[0], filename, ctypes.byref(card_type))
-                return {"result": result, "card_type": card_type.value}
-            elif name.startswith('chk_'):
-                result = func(args[0])
-                return {"result": result}
-            elif name.startswith('srd_24c') or name.startswith('srd_93c'):
-                offset = args[1] if len(args) > 1 else 0
-                length = args[2] if len(args) > 2 else 32
-                buf = ctypes.create_string_buffer(length)
-                result = func(args[0], offset, length, buf)
-                return {"result": result, "data": buf.raw[:length].hex()}
-            elif name.startswith('swr_24c') or name.startswith('swr_93c'):
-                offset = args[1] if len(args) > 1 else 0
-                data_hex = args[2] if len(args) > 2 else ''
-                data_bytes = bytes.fromhex(data_hex)
-                length = len(data_bytes)
-                buf = ctypes.create_string_buffer(data_bytes, length)
-                result = func(args[0], offset, length, buf)
-                return {"result": result}
-            elif name == 'prd_4442':
-                length = args[1] if len(args) > 1 else 32
-                buf = ctypes.create_string_buffer(length)
-                result = func(args[0], length, buf)
-                return {"result": result, "data": buf.raw[:length].hex()}
-            elif name == 'pwr_4442':
-                offset = args[1] if len(args) > 1 else 0
-                data_hex = args[2] if len(args) > 2 else ''
-                data_bytes = bytes.fromhex(data_hex)
-                length = len(data_bytes)
-                buf = ctypes.create_string_buffer(data_bytes, length)
-                result = func(args[0], offset, length, buf)
-                return {"result": result}
-            elif name.startswith('rdwpb_44'):
-                offset = args[1] if len(args) > 1 else 0
-                length = args[2] if len(args) > 2 else 32
-                buf = ctypes.create_string_buffer(length)
-                result = func(args[0], offset, length, buf)
-                return {"result": result, "data": buf.raw[:length].hex()}
-            elif name.startswith('wrwpb_44'):
-                offset = args[1] if len(args) > 1 else 0
-                data_hex = args[2] if len(args) > 2 else ''
-                data_bytes = bytes.fromhex(data_hex)
-                length = len(data_bytes)
-                buf = ctypes.create_string_buffer(data_bytes, length)
-                result = func(args[0], offset, length, buf)
-                return {"result": result}
-            elif name.startswith('rsc_44'):
-                length = args[1] if len(args) > 1 else 4
-                buf = ctypes.create_string_buffer(length)
-                result = func(args[0], length, buf)
-                return {"result": result, "data": buf.raw[:length].hex()}
-            elif name.startswith('wsc_44'):
-                # wsc_4442/wsc_4428: (handle, length, data_hex)
-                length = args[1] if len(args) > 1 else 0
-                data_hex = args[2] if len(args) > 2 else ''
-                if not data_hex or length == 0:
-                    return {"result": -1, "error": "wsc_44: 参数错误"}
-                data_bytes = bytes.fromhex(data_hex)
-                if len(data_bytes) != length:
-                    return {"result": -1, "error": f"wsc_44: 数据长度不匹配，期望{length}，实际{len(data_bytes)}"}
-                buf = ctypes.create_string_buffer(data_bytes, length)
-                result = func(args[0], length, buf)
-                return {"result": result}
-            elif name.startswith('csc_44'):
-                # csc_4442/csc_4428: (handle, length, psc_hex)
-                length = args[1] if len(args) > 1 else 3
-                psc_hex = args[2] if len(args) > 2 else ''
-                if not psc_hex:
-                    return {"result": -1, "error": "csc_44: PSC数据不能为空"}
-                psc_bytes = bytes.fromhex(psc_hex)
-                if len(psc_bytes) != length:
-                    print(f"[WARNING] csc_44: PSC数据长度不匹配，期望{length}，实际{len(psc_bytes)}")
-                psc_buf = ctypes.create_string_buffer(max(length, len(psc_bytes)))
-                ctypes.memmove(psc_buf, psc_bytes, len(psc_bytes))
-                result = func(args[0], length, psc_buf)
-                return {"result": result}
-            elif name.startswith('srd_10') or name.startswith('srd_15') or name.startswith('srd_16'):
-                zone = args[1] if len(args) > 1 else 0
-                offset = args[2] if len(args) > 2 else 0
-                length = args[3] if len(args) > 3 else 32
-                buf = ctypes.create_string_buffer(length)
-                result = func(args[0], zone, offset, length, buf)
-                return {"result": result, "data": buf.raw[:length].hex()}
-            elif name.startswith('swr_10') or name.startswith('swr_15') or name.startswith('swr_16'):
-                zone = args[1] if len(args) > 1 else 0
-                offset = args[2] if len(args) > 2 else 0
-                data_hex = args[3] if len(args) > 3 else ''
-                data_bytes = bytes.fromhex(data_hex)
-                length = len(data_bytes)
-                buf = ctypes.create_string_buffer(data_bytes, length)
-                result = func(args[0], zone, offset, length, buf)
-                return {"result": result}
-            elif name.startswith('srd_44'):
-                offset = args[1] if len(args) > 1 else 0
-                length = args[2] if len(args) > 2 else 32
-                buf = ctypes.create_string_buffer(length)
-                result = func(args[0], offset, length, buf)
-                return {"result": result, "data": buf.raw[:length].hex()}
-            elif name.startswith('swr_44'):
-                offset = args[1] if len(args) > 1 else 0
-                data_hex = args[2] if len(args) > 2 else ''
-                data_bytes = bytes.fromhex(data_hex)
-                length = len(data_bytes)
-                buf = ctypes.create_string_buffer(data_bytes, length)
-                result = func(args[0], offset, length, buf)
-                return {"result": result}
-            elif name.startswith('rsct_44'):
-                counter = ctypes.c_int16(0)
-                result = func(args[0], ctypes.byref(counter))
-                return {"result": result, "counter": counter.value}
-            elif name.startswith('srd_s50') or name.startswith('srd_s70'):
-                sector = args[1] if len(args) > 1 else 0
-                key_hex = args[2] if len(args) > 2 else 'FFFFFFFFFFFF'
-                key_type = args[3] if len(args) > 3 else 0x60
-                key_bytes = bytes.fromhex(key_hex)
-                key_buf = ctypes.create_string_buffer(key_bytes, 6)
-                data_buf = ctypes.create_string_buffer(48)
-                result = func(args[0], sector, key_buf, key_type, data_buf)
-                return {"result": result, "data": data_buf.raw[:48].hex()}
-            elif name.startswith('swr_s50') or name.startswith('swr_s70'):
-                sector = args[1] if len(args) > 1 else 0
-                key_hex = args[2] if len(args) > 2 else 'FFFFFFFFFFFF'
-                data_hex = args[3] if len(args) > 3 else ''
-                key_type = args[4] if len(args) > 4 else 0x60
-                key_bytes = bytes.fromhex(key_hex)
-                key_buf = ctypes.create_string_buffer(key_bytes, 6)
-                data_bytes = bytes.fromhex(data_hex) if data_hex else b''
-                data_buf = ctypes.create_string_buffer(data_bytes, len(data_bytes)) if data_bytes else None
-                if data_buf:
-                    result = func(args[0], sector, key_buf, data_buf, key_type)
-                else:
-                    result = -1
-                return {"result": result}
-            elif name == 'cpu_reset':
-                length = args[1] if len(args) > 1 else 64
-                buf = ctypes.create_string_buffer(length)
-                result = func(args[0], length, buf)
-                return {"result": result, "data": buf.raw[:length].hex()}
-            elif name == 'cpu_apdu':
-                apdu_hex = args[1] if len(args) > 1 else ''
-                apdu_bytes = bytes.fromhex(apdu_hex)
-                apdu_buf = ctypes.create_string_buffer(apdu_bytes, len(apdu_bytes))
-                resp_buf = ctypes.create_string_buffer(256)
-                result = func(args[0], len(apdu_bytes), apdu_buf, resp_buf)
-                return {"result": result, "data": resp_buf.raw[:64].hex()}
-            elif name.startswith('chk_'):
-                result = func(args[0])
-                return {"result": result}
-            else:
-                return {"error": f"未知函数: {name}"}
-        except Exception as e:
-            return {"error": str(e)}
-
-
 class MWIC32:
-
-    _BRIDGE_SCRIPT = r'''
-import ctypes
-import json
-import sys
-import os
-
-dll_path = r'{dll_path}'
-try:
-    dll = ctypes.WinDLL(dll_path)
-except Exception as e:
-    print(json.dumps({{"error": str(e)}}))
-    sys.exit(1)
-
-_func_cache = {{}}
-
-def get_func(name):
-    if name not in _func_cache:
-        func = getattr(dll, name)
-        if name == 'ic_init':
-            func.restype = ctypes.c_long
-            func.argtypes = [ctypes.c_int16, ctypes.c_ulong]
-        elif name == 'ic_exit':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long]
-        elif name == 'dv_beep':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16]
-        elif name in ('get_status', 'get_status0'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.POINTER(ctypes.c_int16)]
-        elif name == 'chk_card':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long]
-        elif name == 'srd_ver':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
-        elif name == 'srd_snr':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
-        elif name == 'chk_baud':
-            func.restype = ctypes.c_int32
-            func.argtypes = [ctypes.c_int16]
-        elif name == 'auto_chk':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long]
-        elif name == 'auto_pull':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long]
-        elif name == 'exp_dis':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int16)]
-        elif name.startswith('chk_'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long]
-        elif name.startswith('srd_24c') or name.startswith('srd_93c'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('swr_24c') or name.startswith('swr_93c'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name == 'prd_4442':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
-        elif name == 'pwr_4442':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('rdwpb_44') or name.startswith('wrwpb_44'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('rsc_44') or name.startswith('wsc_44') or name.startswith('csc_44'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('rsct_44'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.POINTER(ctypes.c_int16)]
-        elif name.startswith('srd_10') or name.startswith('srd_15') or name.startswith('srd_16'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('swr_10') or name.startswith('swr_15') or name.startswith('swr_16'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('srd_44'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('swr_44'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('srd_s50') or name.startswith('srd_s70'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_int16, ctypes.c_char_p]
-        elif name.startswith('swr_s50') or name.startswith('swr_s70'):
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int16]
-        elif name == 'cpu_reset':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
-        elif name == 'cpu_apdu':
-            func.restype = ctypes.c_int16
-            func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_char_p]
-        _func_cache[name] = func
-    return _func_cache[name]
-
-def call_func(name, args):
-    try:
-        func = get_func(name)
-        if name == 'ic_init':
-            result = func(args[0], args[1])
-            return {{"result": result}}
-        elif name == 'ic_exit':
-            result = func(args[0])
-            return {{"result": result}}
-        elif name == 'dv_beep':
-            result = func(args[0], args[1])
-            return {{"result": result}}
-        elif name in ('get_status', 'get_status0'):
-            status = ctypes.c_int16()
-            result = func(args[0], ctypes.byref(status))
-            return {{"result": result, "status": status.value}}
-        elif name == 'chk_card':
-            result = func(args[0])
-            return {{"result": result}}
-        elif name == 'srd_ver':
-            length = args[1] if len(args) > 1 else 18
-            buf = ctypes.create_string_buffer(length + 1)
-            result = func(args[0], length, buf)
-            return {{"result": result, "data": buf.value.decode('ascii', errors='replace')}}
-        elif name == 'srd_snr':
-            length = args[1] if len(args) > 1 else 16
-            buf = ctypes.create_string_buffer(length + 1)
-            result = func(args[0], length, buf)
-            return {{"result": result, "data": buf.raw[:length].hex()}}
-        elif name == 'chk_baud':
-            result = func(args[0])
-            return {{"result": result}}
-        elif name == 'auto_chk':
-            result = func(args[0])
-            return {{"result": result}}
-        elif name == 'auto_pull':
-            result = func(args[0])
-            return {{"result": result}}
-        elif name == 'exp_dis':
-            card_type = ctypes.c_int16()
-            filename = args[1].encode('ascii', errors='replace') if len(args) > 1 and args[1] else b''
-            result = func(args[0], filename, ctypes.byref(card_type))
-            return {{"result": result, "card_type": card_type.value}}
-        elif name.startswith('chk_'):
-            result = func(args[0])
-            return {{"result": result}}
-        elif name.startswith('srd_24c') or name.startswith('srd_93c'):
-            offset = args[1] if len(args) > 1 else 0
-            length = args[2] if len(args) > 2 else 32
-            buf = ctypes.create_string_buffer(length)
-            result = func(args[0], offset, length, buf)
-            return {{"result": result, "data": buf.raw[:length].hex()}}
-        elif name.startswith('swr_24c') or name.startswith('swr_93c'):
-            offset = args[1] if len(args) > 1 else 0
-            data_hex = args[2] if len(args) > 2 else ''
-            data_bytes = bytes.fromhex(data_hex)
-            length = len(data_bytes)
-            buf = ctypes.create_string_buffer(data_bytes, length)
-            result = func(args[0], offset, length, buf)
-            return {{"result": result}}
-        elif name == 'prd_4442':
-            length = args[1] if len(args) > 1 else 32
-            buf = ctypes.create_string_buffer(length)
-            result = func(args[0], length, buf)
-            return {{"result": result, "data": buf.raw[:length].hex()}}
-        elif name == 'pwr_4442':
-            offset = args[1] if len(args) > 1 else 0
-            data_hex = args[2] if len(args) > 2 else ''
-            data_bytes = bytes.fromhex(data_hex)
-            length = len(data_bytes)
-            buf = ctypes.create_string_buffer(data_bytes, length)
-            result = func(args[0], offset, length, buf)
-            return {{"result": result}}
-        elif name.startswith('rdwpb_44'):
-            offset = args[1] if len(args) > 1 else 0
-            length = args[2] if len(args) > 2 else 32
-            buf = ctypes.create_string_buffer(length)
-            result = func(args[0], offset, length, buf)
-            return {{"result": result, "data": buf.raw[:length].hex()}}
-        elif name.startswith('wrwpb_44'):
-            offset = args[1] if len(args) > 1 else 0
-            data_hex = args[2] if len(args) > 2 else ''
-            data_bytes = bytes.fromhex(data_hex)
-            length = len(data_bytes)
-            buf = ctypes.create_string_buffer(data_bytes, length)
-            result = func(args[0], offset, length, buf)
-            return {{"result": result}}
-        elif name.startswith('rsc_44'):
-            length = args[1] if len(args) > 1 else 4
-            buf = ctypes.create_string_buffer(length)
-            result = func(args[0], length, buf)
-            return {{"result": result, "data": buf.raw[:length].hex()}}
-        elif name.startswith('wsc_44'):
-            # wsc_4442/wsc_4428: (handle, length, data_hex)
-            length = args[1] if len(args) > 1 else 0
-            data_hex = args[2] if len(args) > 2 else ''
-            if not data_hex or length == 0:
-                return {{"result": -1, "error": "wsc_44: 参数错误"}}
-            data_bytes = bytes.fromhex(data_hex)
-            if len(data_bytes) != length:
-                return {{"result": -1, "error": f"wsc_44: 数据长度不匹配，期望{{length}}，实际{{len(data_bytes)}}"}}
-            buf = ctypes.create_string_buffer(data_bytes, length)
-            result = func(args[0], length, buf)
-            return {{"result": result}}
-        elif name.startswith('csc_44'):
-            # csc_4442/csc_4428: (handle, length, psc_hex)
-            length = args[1] if len(args) > 1 else 3
-            psc_hex = args[2] if len(args) > 2 else ''
-            if not psc_hex:
-                return {{"result": -1, "error": "csc_44: PSC数据不能为空"}}
-            psc_bytes = bytes.fromhex(psc_hex)
-            if len(psc_bytes) != length:
-                print(f"[WARNING] csc_44: PSC数据长度不匹配，期望{{length}}，实际{{len(psc_bytes)}}")
-            psc_buf = ctypes.create_string_buffer(max(length, len(psc_bytes)))
-            ctypes.memmove(psc_buf, psc_bytes, len(psc_bytes))
-            result = func(args[0], length, psc_buf)
-            return {{"result": result}}
-        elif name.startswith('srd_10') or name.startswith('srd_15') or name.startswith('srd_16'):
-            zone = args[1] if len(args) > 1 else 0
-            offset = args[2] if len(args) > 2 else 0
-            length = args[3] if len(args) > 3 else 32
-            buf = ctypes.create_string_buffer(length)
-            result = func(args[0], zone, offset, length, buf)
-            return {{"result": result, "data": buf.raw[:length].hex()}}
-        elif name.startswith('swr_10') or name.startswith('swr_15') or name.startswith('swr_16'):
-            zone = args[1] if len(args) > 1 else 0
-            offset = args[2] if len(args) > 2 else 0
-            data_hex = args[3] if len(args) > 3 else ''
-            data_bytes = bytes.fromhex(data_hex)
-            length = len(data_bytes)
-            buf = ctypes.create_string_buffer(data_bytes, length)
-            result = func(args[0], zone, offset, length, buf)
-            return {{"result": result}}
-        elif name.startswith('srd_44'):
-            offset = args[1] if len(args) > 1 else 0
-            length = args[2] if len(args) > 2 else 32
-            buf = ctypes.create_string_buffer(length)
-            result = func(args[0], offset, length, buf)
-            return {{"result": result, "data": buf.raw[:length].hex()}}
-        elif name.startswith('swr_44'):
-            offset = args[1] if len(args) > 1 else 0
-            data_hex = args[2] if len(args) > 2 else ''
-            data_bytes = bytes.fromhex(data_hex)
-            length = len(data_bytes)
-            buf = ctypes.create_string_buffer(data_bytes, length)
-            result = func(args[0], offset, length, buf)
-            return {{"result": result}}
-        elif name.startswith('rsct_44'):
-            counter = ctypes.c_int16(0)
-            result = func(args[0], ctypes.byref(counter))
-            return {{"result": result, "counter": counter.value}}
-        elif name.startswith('srd_s50') or name.startswith('srd_s70'):
-            sector = args[1] if len(args) > 1 else 0
-            key_hex = args[2] if len(args) > 2 else 'FFFFFFFFFFFF'
-            key_type = args[3] if len(args) > 3 else 0x60
-            key_bytes = bytes.fromhex(key_hex)
-            key_buf = ctypes.create_string_buffer(key_bytes, 6)
-            data_buf = ctypes.create_string_buffer(48)
-            result = func(args[0], sector, key_buf, key_type, data_buf)
-            return {{"result": result, "data": data_buf.raw[:48].hex()}}
-        elif name.startswith('swr_s50') or name.startswith('swr_s70'):
-            sector = args[1] if len(args) > 1 else 0
-            key_hex = args[2] if len(args) > 2 else 'FFFFFFFFFFFF'
-            data_hex = args[3] if len(args) > 3 else ''
-            key_type = args[4] if len(args) > 4 else 0x60
-            key_bytes = bytes.fromhex(key_hex)
-            key_buf = ctypes.create_string_buffer(key_bytes, 6)
-            data_bytes = bytes.fromhex(data_hex) if data_hex else b''
-            data_buf = ctypes.create_string_buffer(data_bytes, len(data_bytes)) if data_bytes else None
-            if data_buf:
-                result = func(args[0], sector, key_buf, data_buf, key_type)
-            else:
-                result = -1
-            return {{"result": result}}
-        elif name == 'cpu_reset':
-            length = args[1] if len(args) > 1 else 64
-            buf = ctypes.create_string_buffer(length)
-            result = func(args[0], length, buf)
-            return {{"result": result, "data": buf.raw[:length].hex()}}
-        elif name == 'cpu_apdu':
-            apdu_hex = args[1] if len(args) > 1 else ''
-            apdu_bytes = bytes.fromhex(apdu_hex)
-            apdu_buf = ctypes.create_string_buffer(apdu_bytes, len(apdu_bytes))
-            resp_buf = ctypes.create_string_buffer(256)
-            result = func(args[0], len(apdu_bytes), apdu_buf, resp_buf)
-            return {{"result": result, "data": resp_buf.raw[:64].hex()}}
-        elif name.startswith('chk_'):
-            result = func(args[0])
-            return {{"result": result}}
-    except Exception as e:
-        return {{"error": str(e)}}
-
-while True:
-    try:
-        line = input()
-        if not line:
-            continue
-        req = json.loads(line)
-        name = req.get('func', '')
-        args = req.get('args', [])
-        resp = call_func(name, args)
-        print(json.dumps(resp, ensure_ascii=False))
-        sys.stdout.flush()
-    except EOFError:
-        break
-    except Exception as e:
-        print(json.dumps({{"error": str(e)}}))
-        sys.stdout.flush()
-'''
 
     def __init__(self):
         self.device_handle = None
         self.port_type = 0
         self.baud_rate = 9600
         self._mutex = threading.Lock()
-        self._bridge_proc = None
-        self._dll_path = self._find_dll()
         self._last_error = ""
-        self._direct_caller = None
-        self._use_direct = False
-
-        if _is_32bit_python():
+        self._dll_path = self._find_dll()
+        self._dll = None
+        self._func_cache = {}
+        if os.path.exists(self._dll_path):
             try:
-                self._direct_caller = _DirectDLLCaller(self._dll_path)
-                self._use_direct = True
-            except Exception as e:
-                self._use_direct = False
+                self._dll = ctypes.WinDLL(self._dll_path)
+            except OSError as e:
+                self._last_error = f"DLL 加载失败: {self._dll_path} ({e})"
+        elif not self._last_error:
+            self._last_error = f"DLL 未找到: {self._dll_path}"
 
     def _find_dll(self) -> str:
         if getattr(sys, 'frozen', False):
@@ -670,101 +50,380 @@ while True:
         for path in candidates:
             if os.path.exists(path):
                 return path
-        return candidates[0]
+        self._last_error = f"DLL 未找到，已搜索路径: {candidates}"
+        print(self._last_error)
+        return candidates[0] if candidates else ""
 
-    def _find_python32(self) -> str:
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        candidates = [
-            os.path.join(os.path.dirname(base_dir), 'python32', 'python.exe'),
-        ]
-        if getattr(sys, 'frozen', False):
-            candidates.insert(0, os.path.join(os.path.dirname(sys.executable), 'python32', 'python.exe'))
-        for path in candidates:
-            if os.path.exists(path):
-                return path
-        return candidates[0]
-
-    def _start_bridge(self) -> bool:
-        if self._bridge_proc is not None:
-            try:
-                self._bridge_proc.poll()
-                if self._bridge_proc.returncode is not None:
-                    self._bridge_proc = None
-            except Exception:
-                self._bridge_proc = None
-
-        if self._bridge_proc is not None:
-            return True
-
-        python32 = self._find_python32()
-        if not os.path.exists(python32):
-            self._last_error = f"32位 Python 未找到: {python32}"
-            print(self._last_error)
-            return False
-
-        if not os.path.exists(self._dll_path):
-            self._last_error = f"DLL 未找到: {self._dll_path}"
-            print(self._last_error)
-            return False
-
-        script = self._BRIDGE_SCRIPT.format(dll_path=self._dll_path)
-
-        try:
-            self._bridge_proc = subprocess.Popen(
-                [python32, '-u', '-c', script],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            )
-            return True
-        except Exception as e:
-            self._last_error = f"启动桥接进程失败: {e}"
-            print(self._last_error)
-            self._bridge_proc = None
-            return False
+    def _get_dll_func(self, name):
+        if name not in self._func_cache:
+            func = getattr(self._dll, name)
+            if name == 'ic_init':
+                func.restype = ctypes.c_long
+                func.argtypes = [ctypes.c_int16, ctypes.c_ulong]
+            elif name == 'ic_exit':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long]
+            elif name == 'dv_beep':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16]
+            elif name in ('get_status', 'get_status0'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.POINTER(ctypes.c_int16)]
+            elif name == 'chk_card':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long]
+            elif name == 'srd_ver':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
+            elif name == 'srd_snr':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
+            elif name == 'chk_baud':
+                func.restype = ctypes.c_int32
+                func.argtypes = [ctypes.c_int16]
+            elif name == 'auto_chk':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long]
+            elif name == 'auto_pull':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long]
+            elif name == 'exp_dis':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int16)]
+            elif name.startswith('chk_'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long]
+            elif name.startswith('srd_24c') or name.startswith('srd_93c'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
+            elif name.startswith('swr_24c') or name.startswith('swr_93c'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
+            elif name == 'prd_4442':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
+            elif name == 'pwr_4442':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
+            elif name.startswith('rdwpb_44') or name.startswith('wrwpb_44'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
+            elif name.startswith('rsc_44') or name.startswith('wsc_44') or name.startswith('csc_44'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
+            elif name.startswith('rsct_44'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.POINTER(ctypes.c_int16)]
+            elif name.startswith('srd_10') or name.startswith('srd_15') or name.startswith('srd_16'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
+            elif name.startswith('swr_10') or name.startswith('swr_15') or name.startswith('swr_16'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
+            elif name.startswith('srd_44'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
+            elif name.startswith('swr_44'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
+            elif name.startswith('srd_45d041') or name.startswith('srd_dvsc') or name.startswith('srd_ssf1101'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
+            elif name.startswith('swr_45d041') or name.startswith('swr_dvsc') or name.startswith('swr_ssf1101'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
+            elif name.startswith('srd_s50') or name.startswith('srd_s70'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_int16, ctypes.c_char_p]
+            elif name.startswith('swr_s50') or name.startswith('swr_s70'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int16]
+            elif name == 'cpu_reset':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
+            elif name == 'cpu_comres':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_char_p]
+            elif name == 'cpu_protocol':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16]
+            elif name == 'ic_encrypt':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_int16, ctypes.c_char_p]
+            elif name == 'ic_decrypt':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_int16, ctypes.c_char_p]
+            self._func_cache[name] = func
+        return self._func_cache[name]
 
     def _call_dll(self, func_name: str, args: list = None) -> dict:
         if args is None:
             args = []
 
+        if self._dll is None:
+            return {"error": self._last_error}
+
         with self._mutex:
-            if self._use_direct:
-                return self._direct_caller.call(func_name, args)
-
-            if not self._start_bridge():
-                return {"error": self._last_error}
-
             try:
-                req = json.dumps({"func": func_name, "args": args})
-                self._bridge_proc.stdin.write((req + '\n').encode('utf-8'))
-                self._bridge_proc.stdin.flush()
+                func = self._get_dll_func(func_name)
 
-                line = self._bridge_proc.stdout.readline().decode('utf-8').strip()
-                if not line:
-                    self._bridge_proc = None
-                    return {"error": "桥接进程无响应"}
+                if func_name == 'ic_init':
+                    result = func(args[0], args[1])
+                    return {"result": result}
 
-                return json.loads(line)
+                elif func_name == 'ic_exit':
+                    result = func(args[0])
+                    return {"result": result}
+
+                elif func_name == 'dv_beep':
+                    result = func(args[0], args[1])
+                    return {"result": result}
+
+                elif func_name in ('get_status', 'get_status0'):
+                    status = ctypes.c_int16()
+                    result = func(args[0], ctypes.byref(status))
+                    return {"result": result, "status": status.value}
+
+                elif func_name == 'chk_card':
+                    result = func(args[0])
+                    return {"result": result}
+
+                elif func_name == 'srd_ver':
+                    length = args[1] if len(args) > 1 else 18
+                    buf = ctypes.create_string_buffer(length + 1)
+                    result = func(args[0], length, buf)
+                    return {"result": result, "data": buf.value.decode('ascii', errors='replace')}
+
+                elif func_name == 'srd_snr':
+                    length = args[1] if len(args) > 1 else 16
+                    buf = ctypes.create_string_buffer(length + 1)
+                    result = func(args[0], length, buf)
+                    return {"result": result, "data": buf.raw[:length].hex()}
+
+                elif func_name == 'chk_baud':
+                    result = func(args[0])
+                    return {"result": result}
+
+                elif func_name == 'auto_chk':
+                    result = func(args[0])
+                    return {"result": result}
+
+                elif func_name == 'auto_pull':
+                    result = func(args[0])
+                    return {"result": result}
+
+                elif func_name == 'exp_dis':
+                    card_type = ctypes.c_int16()
+                    filename = args[1].encode('ascii', errors='replace') if len(args) > 1 and args[1] else b''
+                    result = func(args[0], filename, ctypes.byref(card_type))
+                    return {"result": result, "card_type": card_type.value}
+
+                elif func_name.startswith('chk_'):
+                    result = func(args[0])
+                    return {"result": result}
+
+                elif func_name.startswith('srd_24c') or func_name.startswith('srd_93c'):
+                    offset = args[1] if len(args) > 1 else 0
+                    length = args[2] if len(args) > 2 else 32
+                    buf = ctypes.create_string_buffer(length)
+                    result = func(args[0], offset, length, buf)
+                    return {"result": result, "data": buf.raw[:length].hex()}
+
+                elif func_name.startswith('swr_24c') or func_name.startswith('swr_93c'):
+                    offset = args[1] if len(args) > 1 else 0
+                    data_hex = args[2] if len(args) > 2 else ''
+                    data_bytes = bytes.fromhex(data_hex)
+                    length = len(data_bytes)
+                    buf = ctypes.create_string_buffer(data_bytes, length)
+                    result = func(args[0], offset, length, buf)
+                    return {"result": result}
+
+                elif func_name == 'prd_4442':
+                    length = args[1] if len(args) > 1 else 32
+                    buf = ctypes.create_string_buffer(length)
+                    result = func(args[0], length, buf)
+                    return {"result": result, "data": buf.raw[:length].hex()}
+
+                elif func_name == 'pwr_4442':
+                    offset = args[1] if len(args) > 1 else 0
+                    data_hex = args[2] if len(args) > 2 else ''
+                    data_bytes = bytes.fromhex(data_hex)
+                    length = len(data_bytes)
+                    buf = ctypes.create_string_buffer(data_bytes, length)
+                    result = func(args[0], offset, length, buf)
+                    return {"result": result}
+
+                elif func_name.startswith('rdwpb_44'):
+                    offset = args[1] if len(args) > 1 else 0
+                    length = args[2] if len(args) > 2 else 32
+                    buf = ctypes.create_string_buffer(length)
+                    result = func(args[0], offset, length, buf)
+                    return {"result": result, "data": buf.raw[:length].hex()}
+
+                elif func_name.startswith('wrwpb_44'):
+                    offset = args[1] if len(args) > 1 else 0
+                    data_hex = args[2] if len(args) > 2 else ''
+                    data_bytes = bytes.fromhex(data_hex)
+                    length = len(data_bytes)
+                    buf = ctypes.create_string_buffer(data_bytes, length)
+                    result = func(args[0], offset, length, buf)
+                    return {"result": result}
+
+                elif func_name.startswith('rsc_44'):
+                    length = args[1] if len(args) > 1 else 4
+                    buf = ctypes.create_string_buffer(length)
+                    result = func(args[0], length, buf)
+                    return {"result": result, "data": buf.raw[:length].hex()}
+
+                elif func_name.startswith('wsc_44'):
+                    length = args[1] if len(args) > 1 else 0
+                    data_hex = args[2] if len(args) > 2 else ''
+                    if not data_hex or length == 0:
+                        return {"result": -1, "error": "wsc_44: invalid params"}
+                    data_bytes = bytes.fromhex(data_hex)
+                    if len(data_bytes) != length:
+                        return {"result": -1, "error": f"wsc_44: length mismatch, expected {length}, got {len(data_bytes)}"}
+                    buf = ctypes.create_string_buffer(data_bytes, length)
+                    result = func(args[0], length, buf)
+                    return {"result": result}
+
+                elif func_name.startswith('csc_44'):
+                    length = args[1] if len(args) > 1 else 3
+                    psc_hex = args[2] if len(args) > 2 else ''
+                    if not psc_hex:
+                        return {"result": -1, "error": "csc_44: PSC data empty"}
+                    psc_bytes = bytes.fromhex(psc_hex)
+                    if len(psc_bytes) != length:
+                        print(f"[WARNING] csc_44: PSC length mismatch, expected {length}, got {len(psc_bytes)}")
+                    psc_buf = ctypes.create_string_buffer(max(length, len(psc_bytes)))
+                    ctypes.memmove(psc_buf, psc_bytes, len(psc_bytes))
+                    result = func(args[0], length, psc_buf)
+                    return {"result": result}
+
+                elif func_name.startswith('srd_10') or func_name.startswith('srd_15') or func_name.startswith('srd_16'):
+                    zone = args[1] if len(args) > 1 else 0
+                    offset = args[2] if len(args) > 2 else 0
+                    length = args[3] if len(args) > 3 else 32
+                    buf = ctypes.create_string_buffer(length)
+                    result = func(args[0], zone, offset, length, buf)
+                    return {"result": result, "data": buf.raw[:length].hex()}
+
+                elif func_name.startswith('swr_10') or func_name.startswith('swr_15') or func_name.startswith('swr_16'):
+                    zone = args[1] if len(args) > 1 else 0
+                    offset = args[2] if len(args) > 2 else 0
+                    data_hex = args[3] if len(args) > 3 else ''
+                    data_bytes = bytes.fromhex(data_hex)
+                    length = len(data_bytes)
+                    buf = ctypes.create_string_buffer(data_bytes, length)
+                    result = func(args[0], zone, offset, length, buf)
+                    return {"result": result}
+
+                elif func_name.startswith('srd_44'):
+                    offset = args[1] if len(args) > 1 else 0
+                    length = args[2] if len(args) > 2 else 32
+                    buf = ctypes.create_string_buffer(length)
+                    result = func(args[0], offset, length, buf)
+                    return {"result": result, "data": buf.raw[:length].hex()}
+
+                elif func_name.startswith('swr_44'):
+                    offset = args[1] if len(args) > 1 else 0
+                    data_hex = args[2] if len(args) > 2 else ''
+                    data_bytes = bytes.fromhex(data_hex)
+                    length = len(data_bytes)
+                    buf = ctypes.create_string_buffer(data_bytes, length)
+                    result = func(args[0], offset, length, buf)
+                    return {"result": result}
+
+                elif func_name.startswith('srd_45d041') or func_name.startswith('srd_dvsc') or func_name.startswith('srd_ssf1101'):
+                    offset = args[1] if len(args) > 1 else 0
+                    length = args[2] if len(args) > 2 else 32
+                    buf = ctypes.create_string_buffer(length)
+                    result = func(args[0], offset, length, buf)
+                    return {"result": result, "data": buf.raw[:length].hex()}
+
+                elif func_name.startswith('swr_45d041') or func_name.startswith('swr_dvsc') or func_name.startswith('swr_ssf1101'):
+                    offset = args[1] if len(args) > 1 else 0
+                    data_hex = args[2] if len(args) > 2 else ''
+                    data_bytes = bytes.fromhex(data_hex)
+                    length = len(data_bytes)
+                    buf = ctypes.create_string_buffer(data_bytes, length)
+                    result = func(args[0], offset, length, buf)
+                    return {"result": result}
+
+                elif func_name.startswith('rsct_44'):
+                    counter = ctypes.c_int16(0)
+                    result = func(args[0], ctypes.byref(counter))
+                    return {"result": result, "counter": counter.value}
+
+                elif func_name.startswith('srd_s50') or func_name.startswith('srd_s70'):
+                    sector = args[1] if len(args) > 1 else 0
+                    key_hex = args[2] if len(args) > 2 else 'FFFFFFFFFFFF'
+                    key_type = args[3] if len(args) > 3 else 0x60
+                    key_bytes = bytes.fromhex(key_hex)
+                    key_buf = ctypes.create_string_buffer(key_bytes, 6)
+                    data_buf = ctypes.create_string_buffer(48)
+                    result = func(args[0], sector, key_buf, key_type, data_buf)
+                    return {"result": result, "data": data_buf.raw[:48].hex()}
+
+                elif func_name.startswith('swr_s50') or func_name.startswith('swr_s70'):
+                    sector = args[1] if len(args) > 1 else 0
+                    key_hex = args[2] if len(args) > 2 else 'FFFFFFFFFFFF'
+                    data_hex = args[3] if len(args) > 3 else ''
+                    key_type = args[4] if len(args) > 4 else 0x60
+                    key_bytes = bytes.fromhex(key_hex)
+                    key_buf = ctypes.create_string_buffer(key_bytes, 6)
+                    data_bytes = bytes.fromhex(data_hex) if data_hex else b''
+                    data_buf = ctypes.create_string_buffer(data_bytes, len(data_bytes)) if data_bytes else None
+                    if data_buf:
+                        result = func(args[0], sector, key_buf, data_buf, key_type)
+                    else:
+                        result = -1
+                    return {"result": result}
+
+                elif func_name == 'cpu_reset':
+                    length = args[1] if len(args) > 1 else 64
+                    buf = ctypes.create_string_buffer(length)
+                    result = func(args[0], length, buf)
+                    return {"result": result, "data": buf.raw[:length].hex()}
+
+                elif func_name == 'cpu_comres':
+                    cmd_hex = args[1] if len(args) > 1 else ''
+                    cmd_bytes = bytes.fromhex(cmd_hex)
+                    cmd_buf = ctypes.create_string_buffer(cmd_bytes, len(cmd_bytes))
+                    resp_buf = ctypes.create_string_buffer(256)
+                    result = func(args[0], len(cmd_bytes), cmd_buf, resp_buf)
+                    return {"result": result, "data": resp_buf.raw[:256].hex()}
+
+                elif func_name == 'cpu_protocol':
+                    protocol = args[1] if len(args) > 1 else 0
+                    result = func(args[0], protocol)
+                    return {"result": result}
+
+                elif func_name == 'ic_encrypt':
+                    key_type = args[1] if len(args) > 1 else 0
+                    data_hex = args[2] if len(args) > 2 else ''
+                    data_bytes = bytes.fromhex(data_hex)
+                    length = len(data_bytes)
+                    in_buf = ctypes.create_string_buffer(data_bytes, length)
+                    out_buf = ctypes.create_string_buffer(length)
+                    result = func(args[0], key_type, in_buf, length, out_buf)
+                    return {"result": result, "data": out_buf.raw[:length].hex()}
+
+                elif func_name == 'ic_decrypt':
+                    key_type = args[1] if len(args) > 1 else 0
+                    data_hex = args[2] if len(args) > 2 else ''
+                    data_bytes = bytes.fromhex(data_hex)
+                    length = len(data_bytes)
+                    in_buf = ctypes.create_string_buffer(data_bytes, length)
+                    out_buf = ctypes.create_string_buffer(length)
+                    result = func(args[0], key_type, in_buf, length, out_buf)
+                    return {"result": result, "data": out_buf.raw[:length].hex()}
+
+                else:
+                    return {"error": f"unknown function: {func_name}"}
+
             except Exception as e:
-                self._bridge_proc = None
                 return {"error": str(e)}
-
-    def _stop_bridge(self):
-        if self._bridge_proc is not None:
-            try:
-                self._bridge_proc.stdin.close()
-            except Exception:
-                pass
-            try:
-                self._bridge_proc.terminate()
-                self._bridge_proc.wait(timeout=3)
-            except Exception:
-                try:
-                    self._bridge_proc.kill()
-                except Exception:
-                    pass
-            self._bridge_proc = None
 
     def ic_usbinit(self) -> int:
         result = self._call_dll('ic_init', [PORT_USB, 0])
@@ -791,7 +450,6 @@ while True:
 
     def ic_exit(self, handle: int) -> int:
         result = self._call_dll('ic_exit', [handle])
-        self._stop_bridge()
         self.device_handle = None
         if 'error' in result:
             return IC_ERR
@@ -805,12 +463,6 @@ while True:
 
     def get_status(self, handle: int) -> Tuple[int, int]:
         result = self._call_dll('get_status', [handle])
-        if 'error' in result:
-            return IC_ERR, 0
-        return result.get('result', IC_ERR), result.get('status', 0)
-
-    def get_status0(self, handle: int) -> Tuple[int, int]:
-        result = self._call_dll('get_status0', [handle])
         if 'error' in result:
             return IC_ERR, 0
         return result.get('result', IC_ERR), result.get('status', 0)
@@ -857,108 +509,17 @@ while True:
             return IC_ERR, 0
         return result.get('result', IC_ERR), result.get('card_type', 0)
 
-    def chk_4442(self, handle: int) -> int:
-        result = self._call_dll('chk_4442', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
-    def chk_4428(self, handle: int) -> int:
-        result = self._call_dll('chk_4428', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
-    def chk_4418(self, handle: int) -> int:
-        result = self._call_dll('chk_4418', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
-    def chk_24c(self, handle: int) -> int:
-        result = self._call_dll('chk_24c', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
-    def chk_24c01a(self, handle: int) -> int:
-        result = self._call_dll('chk_24c01a', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
-    def chk_24c02(self, handle: int) -> int:
-        result = self._call_dll('chk_24c02', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
-    def chk_24c04(self, handle: int) -> int:
-        result = self._call_dll('chk_24c04', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
-    def chk_24c08(self, handle: int) -> int:
-        result = self._call_dll('chk_24c08', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
-    def chk_24c16(self, handle: int) -> int:
-        result = self._call_dll('chk_24c16', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
-    def chk_24c32(self, handle: int) -> int:
-        result = self._call_dll('chk_24c32', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
-    def chk_24c64(self, handle: int) -> int:
-        result = self._call_dll('chk_24c64', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
     def chk_at88c102(self, handle: int) -> int:
-        result = self._call_dll('chk_102', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
+        return IC_ERR if 'error' in (r := self._call_dll('chk_102', [handle])) else r.get('result', IC_ERR)
 
     def chk_at88c1604(self, handle: int) -> int:
-        result = self._call_dll('chk_1604', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
+        return IC_ERR if 'error' in (r := self._call_dll('chk_1604', [handle])) else r.get('result', IC_ERR)
 
     def chk_at88sc153(self, handle: int) -> int:
-        result = self._call_dll('chk_153', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
+        return IC_ERR if 'error' in (r := self._call_dll('chk_153', [handle])) else r.get('result', IC_ERR)
 
     def chk_at88sc1604b(self, handle: int) -> int:
-        result = self._call_dll('chk_1604b', [handle])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
-    def srd_4442(self, handle: int, offset: int, length: int) -> Tuple[int, bytes]:
-        result = self._call_dll('srd_4442', [handle, offset, length])
-        if 'error' in result:
-            return IC_ERR, b''
-        data_hex = result.get('data', '')
-        return result.get('result', IC_ERR), bytes.fromhex(data_hex) if data_hex else b''
-
-    def swr_4442(self, handle: int, offset: int, data: bytes) -> int:
-        result = self._call_dll('swr_4442', [handle, offset, data.hex()])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
+        return IC_ERR if 'error' in (r := self._call_dll('chk_1604b', [handle])) else r.get('result', IC_ERR)
 
     def prd_4442(self, handle: int, length: int) -> Tuple[int, bytes]:
         result = self._call_dll('prd_4442', [handle, length])
@@ -1014,19 +575,6 @@ while True:
             return IC_ERR, -1
         return result.get('result', IC_ERR), result.get('counter', -1)
 
-    def srd_4428(self, handle: int, offset: int, length: int) -> Tuple[int, bytes]:
-        result = self._call_dll('srd_4428', [handle, offset, length])
-        if 'error' in result:
-            return IC_ERR, b''
-        data_hex = result.get('data', '')
-        return result.get('result', IC_ERR), bytes.fromhex(data_hex) if data_hex else b''
-
-    def swr_4428(self, handle: int, offset: int, data: bytes) -> int:
-        result = self._call_dll('swr_4428', [handle, offset, data.hex()])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
     def rdwpb_4428(self, handle: int, offset: int, length: int) -> Tuple[int, bytes]:
         result = self._call_dll('rdwpb_4428', [handle, offset, length])
         if 'error' in result:
@@ -1068,19 +616,6 @@ while True:
             return IC_ERR, -1
         return result.get('result', IC_ERR), result.get('counter', -1)
 
-    def srd_4418(self, handle: int, offset: int, length: int) -> Tuple[int, bytes]:
-        result = self._call_dll('srd_4418', [handle, offset, length])
-        if 'error' in result:
-            return IC_ERR, b''
-        data_hex = result.get('data', '')
-        return result.get('result', IC_ERR), bytes.fromhex(data_hex) if data_hex else b''
-
-    def swr_4418(self, handle: int, offset: int, data: bytes) -> int:
-        result = self._call_dll('swr_4418', [handle, offset, data.hex()])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
     def rdwpb_4418(self, handle: int, offset: int, length: int) -> Tuple[int, bytes]:
         result = self._call_dll('rdwpb_4418', [handle, offset, length])
         if 'error' in result:
@@ -1105,19 +640,6 @@ while True:
     def swr_24c(self, handle: int, size: str, offset: int, data: bytes) -> int:
         func_name = f'swr_24c{size}'
         result = self._call_dll(func_name, [handle, offset, data.hex()])
-        if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
-
-    def srd_93c(self, handle: int, offset: int, length: int) -> Tuple[int, bytes]:
-        result = self._call_dll('srd_93c', [handle, offset, length])
-        if 'error' in result:
-            return IC_ERR, b''
-        data_hex = result.get('data', '')
-        return result.get('result', IC_ERR), bytes.fromhex(data_hex) if data_hex else b''
-
-    def swr_93c(self, handle: int, offset: int, data: bytes) -> int:
-        result = self._call_dll('swr_93c', [handle, offset, data.hex()])
         if 'error' in result:
             return IC_ERR
         return result.get('result', IC_ERR)
@@ -1187,6 +709,31 @@ while True:
             return IC_ERR
         return result.get('result', IC_ERR)
 
+    def __getattr__(self, name):
+        if name.startswith('chk_') and not hasattr(type(self), name):
+            def _chk(handle):
+                result = self._call_dll(name, [handle])
+                if 'error' in result:
+                    return IC_ERR
+                return result.get('result', IC_ERR)
+            return _chk
+        if name.startswith('srd_') and not hasattr(type(self), name):
+            def _srd(handle, offset, length):
+                result = self._call_dll(name, [handle, offset, length])
+                if 'error' in result:
+                    return IC_ERR, b''
+                data_hex = result.get('data', '')
+                return result.get('result', IC_ERR), bytes.fromhex(data_hex) if data_hex else b''
+            return _srd
+        if name.startswith('swr_') and not hasattr(type(self), name):
+            def _swr(handle, offset, data):
+                result = self._call_dll(name, [handle, offset, data.hex()])
+                if 'error' in result:
+                    return IC_ERR
+                return result.get('result', IC_ERR)
+            return _swr
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
     def srd_s50(self, handle: int, sector: int, key: bytes, key_type: int = 0x60) -> Tuple[int, bytes]:
         result = self._call_dll('srd_s50', [handle, sector, key.hex(), key_type])
         if 'error' in result:
@@ -1220,30 +767,29 @@ while True:
         data_hex = result.get('data', '')
         return result.get('result', IC_ERR), bytes.fromhex(data_hex) if data_hex else b''
 
-    def cpu_apdu(self, handle: int, apdu: bytes) -> Tuple[int, bytes]:
-        result = self._call_dll('cpu_apdu', [handle, apdu.hex()])
+    def cpu_comres(self, handle: int, cmd: bytes) -> Tuple[int, bytes]:
+        result = self._call_dll('cpu_comres', [handle, cmd.hex()])
         if 'error' in result:
             return IC_ERR, b''
         data_hex = result.get('data', '')
         return result.get('result', IC_ERR), bytes.fromhex(data_hex) if data_hex else b''
 
-    def wrt_4442_psc(self, handle: int, old_psc: bytes, new_psc: bytes) -> int:
-        result = self._call_dll('wsc_4442', [handle, len(new_psc), new_psc.hex()])
+    def cpu_protocol(self, handle: int, protocol: int = 0) -> int:
+        result = self._call_dll('cpu_protocol', [handle, protocol])
         if 'error' in result:
             return IC_ERR
         return result.get('result', IC_ERR)
 
-    def wrt_4428_psc(self, handle: int, old_psc: bytes, new_psc: bytes) -> int:
-        result = self._call_dll('wsc_4428', [handle, len(new_psc), new_psc.hex()])
+    def ic_encrypt(self, handle: int, key_type: int, data: bytes) -> Tuple[int, bytes]:
+        result = self._call_dll('ic_encrypt', [handle, key_type, data.hex()])
         if 'error' in result:
-            return IC_ERR
-        return result.get('result', IC_ERR)
+            return IC_ERR, b''
+        data_hex = result.get('data', '')
+        return result.get('result', IC_ERR), bytes.fromhex(data_hex) if data_hex else b''
 
-    def disconnect(self):
-        if self.device_handle is not None and self.device_handle > 0:
-            try:
-                self.ic_exit(self.device_handle)
-            except Exception:
-                pass
-            self.device_handle = None
-        self._stop_bridge()
+    def ic_decrypt(self, handle: int, key_type: int, data: bytes) -> Tuple[int, bytes]:
+        result = self._call_dll('ic_decrypt', [handle, key_type, data.hex()])
+        if 'error' in result:
+            return IC_ERR, b''
+        data_hex = result.get('data', '')
+        return result.get('result', IC_ERR), bytes.fromhex(data_hex) if data_hex else b''

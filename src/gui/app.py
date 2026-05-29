@@ -14,6 +14,7 @@ from src.core.mwic import MWIC32
 from src.core.detector import AutoCardDetector
 from src.core.types import DeviceStatus, CardType, CardFullData, get_card_memory_info
 from src.gui.card_editor import CardDataEditor
+from src.gui.cpu_card_editor import CpuCardEditor
 from src.core.constants import IC_OK, IC_ERR, IC_ERR_NO_CARD, IC_ERR_PORT
 
 
@@ -389,7 +390,10 @@ class CardDetectorGUI:
 
     def _open_card_editor(self, card_data: CardFullData):
         try:
-            editor = CardDataEditor(self.root, self.detector, card_data, log_callback=self._log)
+            if card_data.card_type == CardType.CPU_CARD:
+                editor = CpuCardEditor(self.root, self.detector, log_callback=self._log)
+            else:
+                editor = CardDataEditor(self.root, self.detector, card_data, log_callback=self._log)
             self._editor_windows.append(editor)
             editor.bind('<Destroy>', lambda e: self._on_editor_destroyed(editor))
             editor.focus_set()
@@ -502,12 +506,12 @@ class CardDetectorGUI:
 
     def _show_about(self):
         about_text = """
-卡片自动探测器
+明华澳汉SRD-U100 读卡器程序
 版本：2.0.0
 
-通过 32 位 Python 子进程桥接 MWIC_32.dll
 支持 HID/USB/串口通信
 支持 Mifare/EEPROM/SLE4442/AT24C 等卡片
+by manafeng
         """
         messagebox.showinfo("关于", about_text.strip())
 
@@ -516,7 +520,6 @@ class CardDetectorGUI:
             self._stop_detection()
         if self.detector.status.connected:
             self._disconnect_device()
-        self.mwic._stop_bridge()
         self.root.quit()
 
 

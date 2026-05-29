@@ -27,6 +27,14 @@ class CardType(Enum):
     AT88C1608 = 15
     AT88SC153 = 16
     AT88SC1604B = 17
+    CARD4404 = 19
+    CARD4406 = 20
+    CARD4432 = 21
+    CARD45D041 = 22
+    CARD93C46 = 23
+    CARD93C46A = 24
+    CARDDVSC = 25
+    CARDSSF1101 = 26
 
 
 @dataclass
@@ -100,6 +108,14 @@ class CardMemoryInfo:
         if self.card_type in (CardType.AT88C102, CardType.AT88C1604, CardType.AT88C1608,
                               CardType.AT88SC153, CardType.AT88SC1604B):
             return 32
+        if self.card_type in (CardType.CARD4404, CardType.CARD4406, CardType.CARD4432):
+            return 32
+        if self.card_type in (CardType.CARD45D041,):
+            return 264
+        if self.card_type in (CardType.CARD93C46, CardType.CARD93C46A):
+            return 32
+        if self.card_type in (CardType.CARDDVSC, CardType.CARDSSF1101):
+            return 32
         return 32
 
 
@@ -168,6 +184,38 @@ CARD_MEMORY_MAP = {
     CardType.AT88SC1604B: CardMemoryInfo(
         card_type=CardType.AT88SC1604B, total_bytes=2048, page_size=1,
         description="AT88SC1604B - 2KB"
+    ),
+    CardType.CARD4404: CardMemoryInfo(
+        card_type=CardType.CARD4404, total_bytes=256, page_size=1,
+        description="4404 - 256字节"
+    ),
+    CardType.CARD4406: CardMemoryInfo(
+        card_type=CardType.CARD4406, total_bytes=1024, page_size=1,
+        description="4406 - 1KB"
+    ),
+    CardType.CARD4432: CardMemoryInfo(
+        card_type=CardType.CARD4432, total_bytes=1024, page_size=1,
+        description="4432 - 1KB"
+    ),
+    CardType.CARD45D041: CardMemoryInfo(
+        card_type=CardType.CARD45D041, total_bytes=528384, page_size=1,
+        description="45D041 - 528KB DataFlash"
+    ),
+    CardType.CARD93C46: CardMemoryInfo(
+        card_type=CardType.CARD93C46, total_bytes=128, page_size=1,
+        description="93C46 - 128字节 EEPROM"
+    ),
+    CardType.CARD93C46A: CardMemoryInfo(
+        card_type=CardType.CARD93C46A, total_bytes=128, page_size=1,
+        description="93C46A - 128字节 EEPROM"
+    ),
+    CardType.CARDDVSC: CardMemoryInfo(
+        card_type=CardType.CARDDVSC, total_bytes=256, page_size=1,
+        description="DVSC - 256字节"
+    ),
+    CardType.CARDSSF1101: CardMemoryInfo(
+        card_type=CardType.CARDSSF1101, total_bytes=256, page_size=1,
+        description="SSF1101 - 256字节"
     ),
 }
 
