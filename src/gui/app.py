@@ -15,7 +15,7 @@ from src.core.detector import AutoCardDetector
 from src.core.types import DeviceStatus, CardType, CardFullData, get_card_memory_info
 from src.gui.card_editor import CardDataEditor
 from src.gui.cpu_card_editor import CpuCardEditor
-from src.core.constants import IC_OK, IC_ERR, IC_ERR_NO_CARD, IC_ERR_PORT
+from src.core.constants import IC_OK, IC_ERR, IC_ERR_NO_CARD, IC_ERR_PORT, VERSION_STRING
 
 
 class CardDetectorGUI:
@@ -505,12 +505,12 @@ class CardDetectorGUI:
             self._log(f"更新卡片信息错误：{e}", "ERROR")
 
     def _show_about(self):
-        about_text = """
+        about_text = f"""
 明华澳汉SRD-U100 读卡器程序
-版本：2.0.0
+版本：{VERSION_STRING}
 
 支持 HID/USB/串口通信
-支持 Mifare/EEPROM/SLE4442/AT24C 等卡片
+支持 EEPROM/SLE4442/SLE4428/AT24C 等接触式卡片
 by manafeng
         """
         messagebox.showinfo("关于", about_text.strip())

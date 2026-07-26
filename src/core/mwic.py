@@ -114,6 +114,19 @@ class MWIC32:
             elif name.startswith('rsct_44'):
                 func.restype = ctypes.c_int16
                 func.argtypes = [ctypes.c_long, ctypes.POINTER(ctypes.c_int16)]
+            # AT88 口令型卡（102/1604/1604b）安全码操作，签名见 Mwic_32.h
+            elif name in ('csc_102', 'wsc_102', 'rsc_102'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
+            elif name == 'rsct_102':
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.POINTER(ctypes.c_int16)]
+            elif name in ('csc_1604', 'wsc_1604', 'csc_1604b', 'wsc_1604b'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
+            elif name in ('rsct_1604', 'rsct_1604b'):
+                func.restype = ctypes.c_int16
+                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.POINTER(ctypes.c_int16)]
             elif name.startswith('srd_10') or name.startswith('srd_15') or name.startswith('srd_16'):
                 func.restype = ctypes.c_int16
                 func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
@@ -126,6 +139,11 @@ class MWIC32:
             elif name.startswith('swr_44'):
                 func.restype = ctypes.c_int16
                 func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
+            # 警告：以下签名与 Mwic_32.h 不符，仅为占位，且已从自动识别中移除，当前无调用者。
+            #   真实签名：srd_dvsc(HANDLE, len, buf) —— 无 offset；
+            #            srd_45d041(HANDLE, page, offset, unsigned long len, buf)；
+            #            srd_ssf1101(HANDLE, page, offset, long len, buf)。
+            #   若要支持这些卡型，必须按上述真实签名重写本分组及 card_ops 中的读写逻辑。
             elif name.startswith('srd_45d041') or name.startswith('srd_dvsc') or name.startswith('srd_ssf1101'):
                 func.restype = ctypes.c_int16
                 func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_int16, ctypes.c_char_p]
@@ -139,8 +157,9 @@ class MWIC32:
                 func.restype = ctypes.c_int16
                 func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int16]
             elif name == 'cpu_reset':
+                # Mwic_32.h: cpu_reset(HANDLE, unsigned char *) —— 无长度参数。
                 func.restype = ctypes.c_int16
-                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p]
+                func.argtypes = [ctypes.c_long, ctypes.c_char_p]
             elif name == 'cpu_comres':
                 func.restype = ctypes.c_int16
                 func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_char_p]
@@ -355,6 +374,40 @@ class MWIC32:
                     result = func(args[0], ctypes.byref(counter))
                     return {"result": result, "counter": counter.value}
 
+                elif func_name in ('csc_102', 'wsc_102', 'rsc_102'):
+                    length = args[1] if len(args) > 1 else 0
+                    data_hex = args[2] if len(args) > 2 else ''
+                    data_bytes = bytes.fromhex(data_hex) if data_hex else b''
+                    buf = ctypes.create_string_buffer(max(length, len(data_bytes), 1))
+                    if data_bytes:
+                        ctypes.memmove(buf, data_bytes, len(data_bytes))
+                    result = func(args[0], length, buf)
+                    if func_name == 'rsc_102':
+                        return {"result": result, "data": buf.raw[:length].hex()}
+                    return {"result": result}
+
+                elif func_name == 'rsct_102':
+                    counter = ctypes.c_int16(0)
+                    result = func(args[0], ctypes.byref(counter))
+                    return {"result": result, "counter": counter.value}
+
+                elif func_name in ('csc_1604', 'wsc_1604', 'csc_1604b', 'wsc_1604b'):
+                    zone = args[1] if len(args) > 1 else 0
+                    length = args[2] if len(args) > 2 else 0
+                    data_hex = args[3] if len(args) > 3 else ''
+                    data_bytes = bytes.fromhex(data_hex) if data_hex else b''
+                    buf = ctypes.create_string_buffer(max(length, len(data_bytes), 1))
+                    if data_bytes:
+                        ctypes.memmove(buf, data_bytes, len(data_bytes))
+                    result = func(args[0], zone, length, buf)
+                    return {"result": result}
+
+                elif func_name in ('rsct_1604', 'rsct_1604b'):
+                    zone = args[1] if len(args) > 1 else 0
+                    counter = ctypes.c_int16(0)
+                    result = func(args[0], zone, ctypes.byref(counter))
+                    return {"result": result, "counter": counter.value}
+
                 elif func_name.startswith('srd_s50') or func_name.startswith('srd_s70'):
                     sector = args[1] if len(args) > 1 else 0
                     key_hex = args[2] if len(args) > 2 else 'FFFFFFFFFFFF'
@@ -381,9 +434,10 @@ class MWIC32:
                     return {"result": result}
 
                 elif func_name == 'cpu_reset':
+                    # cpu_reset(HANDLE, uchar*)：length 仅用于分配 ATR 缓冲区，不传给 DLL。
                     length = args[1] if len(args) > 1 else 64
                     buf = ctypes.create_string_buffer(length)
-                    result = func(args[0], length, buf)
+                    result = func(args[0], buf)
                     return {"result": result, "data": buf.raw[:length].hex()}
 
                 elif func_name == 'cpu_comres':
@@ -555,9 +609,8 @@ class MWIC32:
         return result.get('result', IC_ERR), bytes.fromhex(data_hex) if data_hex else b''
 
     def wsc_4442(self, handle: int, data: bytes) -> int:
-        print(f"[DEBUG] wsc_4442 调用: handle={handle}, len={len(data)}, data={data.hex().upper()}")
+        # 注意：data 为卡片 PSC 密码，不要打印其内容。
         result = self._call_dll('wsc_4442', [handle, len(data), data.hex()])
-        print(f"[DEBUG] wsc_4442 返回: {result}")
         if 'error' in result:
             print(f"[ERROR] wsc_4442 错误: {result['error']}")
             return IC_ERR
@@ -596,9 +649,8 @@ class MWIC32:
         return result.get('result', IC_ERR), bytes.fromhex(data_hex) if data_hex else b''
 
     def wsc_4428(self, handle: int, data: bytes) -> int:
-        print(f"[DEBUG] wsc_4428 调用: handle={handle}, len={len(data)}, data={data.hex().upper()}")
+        # 注意：data 为卡片 PSC 密码，不要打印其内容。
         result = self._call_dll('wsc_4428', [handle, len(data), data.hex()])
-        print(f"[DEBUG] wsc_4428 返回: {result}")
         if 'error' in result:
             print(f"[ERROR] wsc_4428 错误: {result['error']}")
             return IC_ERR
@@ -708,6 +760,61 @@ class MWIC32:
         if 'error' in result:
             return IC_ERR
         return result.get('result', IC_ERR)
+
+    # ---- AT88 口令型卡（102/1604/1604b）安全码：验证 / 修改 / 读尝试计数 ----
+    def csc_at88c102(self, handle: int, psc: bytes) -> int:
+        result = self._call_dll('csc_102', [handle, len(psc), psc.hex()])
+        if 'error' in result:
+            return IC_ERR
+        return result.get('result', IC_ERR)
+
+    def wsc_at88c102(self, handle: int, psc: bytes) -> int:
+        result = self._call_dll('wsc_102', [handle, len(psc), psc.hex()])
+        if 'error' in result:
+            return IC_ERR
+        return result.get('result', IC_ERR)
+
+    def rsct_at88c102(self, handle: int) -> Tuple[int, int]:
+        result = self._call_dll('rsct_102', [handle])
+        if 'error' in result:
+            return IC_ERR, -1
+        return result.get('result', IC_ERR), result.get('counter', -1)
+
+    def csc_at88sc1604(self, handle: int, zone: int, psc: bytes) -> int:
+        result = self._call_dll('csc_1604', [handle, zone, len(psc), psc.hex()])
+        if 'error' in result:
+            return IC_ERR
+        return result.get('result', IC_ERR)
+
+    def wsc_at88sc1604(self, handle: int, zone: int, psc: bytes) -> int:
+        result = self._call_dll('wsc_1604', [handle, zone, len(psc), psc.hex()])
+        if 'error' in result:
+            return IC_ERR
+        return result.get('result', IC_ERR)
+
+    def rsct_at88sc1604(self, handle: int, zone: int) -> Tuple[int, int]:
+        result = self._call_dll('rsct_1604', [handle, zone])
+        if 'error' in result:
+            return IC_ERR, -1
+        return result.get('result', IC_ERR), result.get('counter', -1)
+
+    def csc_at88sc1604b(self, handle: int, zone: int, psc: bytes) -> int:
+        result = self._call_dll('csc_1604b', [handle, zone, len(psc), psc.hex()])
+        if 'error' in result:
+            return IC_ERR
+        return result.get('result', IC_ERR)
+
+    def wsc_at88sc1604b(self, handle: int, zone: int, psc: bytes) -> int:
+        result = self._call_dll('wsc_1604b', [handle, zone, len(psc), psc.hex()])
+        if 'error' in result:
+            return IC_ERR
+        return result.get('result', IC_ERR)
+
+    def rsct_at88sc1604b(self, handle: int, zone: int) -> Tuple[int, int]:
+        result = self._call_dll('rsct_1604b', [handle, zone])
+        if 'error' in result:
+            return IC_ERR, -1
+        return result.get('result', IC_ERR), result.get('counter', -1)
 
     def __getattr__(self, name):
         if name.startswith('chk_') and not hasattr(type(self), name):

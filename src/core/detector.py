@@ -19,14 +19,23 @@ CHK_ORDER = [
     ('chk_4442', CardType.SLE4442, None),
     ('chk_4428', CardType.SLE4428, None),
     ('chk_4418', CardType.SLE4418, None),
+    # AT88C / AT88SC 系列：先检更专用的 SC 变体，避免被基础型号先行匹配。
+    # 以下 chk 函数均已在 Mwic_32.h 中确认存在。
+    ('chk_102', CardType.AT88C102, None),
+    ('chk_153', CardType.AT88SC153, None),
+    ('chk_1604b', CardType.AT88SC1604B, None),
+    ('chk_1608', CardType.AT88C1608, None),
+    ('chk_1604', CardType.AT88C1604, None),
     ('chk_4404', CardType.CARD4404, None),
     ('chk_4406', CardType.CARD4406, None),
     ('chk_4432', CardType.CARD4432, None),
-    ('chk_45d041', CardType.CARD45D041, None),
     ('chk_93c46', CardType.CARD93C46, None),
     ('chk_93c46a', CardType.CARD93C46A, None),
-    ('chk_dvsc', CardType.CARDDVSC, None),
-    ('chk_ssf1101', CardType.CARDSSF1101, None),
+    # 已按 Mwic_32.h 核对后从自动识别中移除的卡型：
+    #   - DVSC：DLL 未提供 chk_dvsc，无法探测；且 srd_dvsc(HANDLE,len,buf) 无 offset 参数。
+    #   - 45D041 / SSF1101：真实接口为「页+页内偏移+长度」寻址
+    #     （srd_45d041(HANDLE,page,offset,unsigned long len,buf)，ssf1101 同形），
+    #     与当前 card_ops 的平坦偏移读写路径及 mwic.py 封装签名均不匹配，需专门实现后再启用。
 ]
 
 
@@ -47,7 +56,7 @@ class AutoCardDetector(CardOperationsMixin):
         self._running = False
         self._detect_thread: Optional[threading.Thread] = None
         self._callback: Optional[Callable] = None
-        self._mutex = threading.Lock()
+        # 所有 DLL 调用已在 MWIC32._call_dll 内用锁串行化，此处无需再加锁。
         self._last_read_data: Optional[CardFullData] = None
 
     def connect(self, port_type: int = 0, baud_rate: int = 9600) -> bool:

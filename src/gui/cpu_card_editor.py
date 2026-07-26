@@ -304,7 +304,6 @@ class CpuCardEditor(tk.Toplevel):
         sw_desc = ""
         if len(resp) >= 2:
             sw = f"{resp[-2]:02X}{resp[-1]:02X}"
-            self.sw_var.set(f"SW: {sw}")
             sw_desc = self.RESP_SW_DESC.get(sw, "")
             if not sw_desc and sw.startswith("6C"):
                 sw_desc = f"长度错误(应为 {int(sw[2:], 16)})"

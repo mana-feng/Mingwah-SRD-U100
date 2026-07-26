@@ -13,6 +13,15 @@ from src.core.constants import IC_OK, IC_ERR
 from src.gui.password_dialogs import PasswordDialog, ChangePasswordDialog
 
 
+# 口令型卡：验证安全码（csc）后即可读写
+PASSWORD_CARD_TYPES = (
+    CardType.SLE4442, CardType.SLE4428,
+    CardType.AT88C102, CardType.AT88C1604, CardType.AT88SC1604B,
+)
+# 密码学认证卡：需挑战-应答握手（算法未公开），暂不支持安全区写入
+CRYPTO_AUTH_CARD_TYPES = (CardType.AT88SC153, CardType.AT88C1608)
+
+
 class CardDataEditor(tk.Toplevel):
     BYTES_PER_LINE = 16
 
@@ -53,7 +62,8 @@ class CardDataEditor(tk.Toplevel):
 
     def _determine_editable(self) -> bool:
         card_type = self.card_data.card_type
-        if card_type in (CardType.SLE4442, CardType.SLE4428):
+        # 口令型卡需先验证安全码；密码学认证卡暂不支持写入。
+        if card_type in PASSWORD_CARD_TYPES or card_type in CRYPTO_AUTH_CARD_TYPES:
             return False
         return True
 
@@ -77,12 +87,15 @@ class CardDataEditor(tk.Toplevel):
         self.verify_status_label = ttk.Label(info_frame, textvariable=self.verify_status_var, foreground="#CC6600")
         self.verify_status_label.pack(side=tk.RIGHT, padx=10)
 
-        if self.card_data.card_type in (CardType.SLE4442, CardType.SLE4428):
+        if self.card_data.card_type in PASSWORD_CARD_TYPES:
             attempts_text = self._format_attempts_text(self._remaining_attempts)
-            self.verify_status_var.set(f"⚠ 需要验证密码才能编辑  {attempts_text}")
-            self.change_pwd_btn = ttk.Button(info_frame, text="修改密码", command=self._change_password, state='disabled')
+            self.verify_status_var.set(f"⚠ 需要验证安全码才能编辑  {attempts_text}")
+            self.change_pwd_btn = ttk.Button(info_frame, text="修改安全码", command=self._change_password, state='disabled')
             self.change_pwd_btn.pack(side=tk.RIGHT, padx=5)
-            ttk.Button(info_frame, text="验证密码", command=self._verify_password).pack(side=tk.RIGHT, padx=5)
+            ttk.Button(info_frame, text="验证安全码", command=self._verify_password).pack(side=tk.RIGHT, padx=5)
+        elif self.card_data.card_type in CRYPTO_AUTH_CARD_TYPES:
+            self.verify_status_var.set("⚠ 该卡需加密认证（挑战-应答），暂不支持安全区读写")
+            self.verify_status_label.config(foreground="red")
 
         notebook = ttk.Notebook(self)
         notebook.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
@@ -291,12 +304,15 @@ class CardDataEditor(tk.Toplevel):
             return 3
         elif self.card_data.card_type == CardType.SLE4428:
             return 8
-        return 8
+        # 其他卡（如 AT88 口令型）最大次数未知
+        return -1
 
     def _format_attempts_text(self, attempts: int) -> str:
         max_attempts = self._get_max_attempts()
         if attempts < 0:
             return "[剩余校验次数: 未知]"
+        elif max_attempts < 0:
+            return f"[剩余校验次数: {attempts}]"
         elif attempts == 0:
             return f"[剩余校验次数: 0/{max_attempts} ⛔ 已锁定]"
         elif attempts <= max_attempts // 3:
@@ -355,8 +371,6 @@ class CardDataEditor(tk.Toplevel):
         threading.Thread(target=verify_thread, daemon=True).start()
 
     def _change_password(self):
-        print(f"[DEBUG] [CHANGE_PWD] 开始修改密码流程")
-        print(f"[DEBUG] [CHANGE_PWD] password_verified={self.password_verified}, remaining_attempts={self._remaining_attempts}")
         if not self.password_verified:
             messagebox.showwarning("需要验证", "请先验证当前密码才能修改密码", parent=self)
             return
@@ -369,11 +383,9 @@ class CardDataEditor(tk.Toplevel):
         self.wait_window(dialog)
 
         if dialog.result is None:
-            print(f"[DEBUG] [CHANGE_PWD] 用户取消输入")
             return
 
         new_password = dialog.result
-        print(f"[DEBUG] [CHANGE_PWD] 用户输入新密码：{new_password.hex().upper()}")
 
         if not messagebox.askyesno(
             "确认修改密码",
@@ -382,19 +394,13 @@ class CardDataEditor(tk.Toplevel):
             f"⚠ 修改后请牢记新密码，忘记密码将无法恢复！",
             parent=self
         ):
-            print(f"[DEBUG] [CHANGE_PWD] 用户取消确认")
             return
 
-        print(f"[DEBUG] [CHANGE_PWD] 开始调用 detector.change_card_password")
-        
         def change_thread():
             try:
-                print(f"[DEBUG] [CHANGE_PWD] 线程：调用 change_card_password, new_password={new_password.hex().upper()}")
                 success = self.detector.change_card_password(self.current_password, new_password)
-                print(f"[DEBUG] [CHANGE_PWD] 线程：change_card_password 返回 success={success}")
                 self.after(0, lambda: self._on_change_password_result(success, new_password))
-            except Exception as e:
-                print(f"[DEBUG] [CHANGE_PWD] 线程异常：{e}")
+            except Exception:
                 self.after(0, lambda: self._on_change_password_result(False, new_password))
 
         threading.Thread(target=change_thread, daemon=True).start()
@@ -403,7 +409,7 @@ class CardDataEditor(tk.Toplevel):
         if success:
             self.current_password = new_password
             if self.log_callback:
-                self.log_callback(f"卡片密码修改成功，新密码: {new_password.hex().upper()}", "SUCCESS")
+                self.log_callback("卡片密码修改成功", "SUCCESS")
             messagebox.showinfo("修改成功", f"密码已成功修改！\n新密码: {new_password.hex().upper()}\n\n请牢记新密码！", parent=self)
         else:
             if self.log_callback:
@@ -416,14 +422,18 @@ class CardDataEditor(tk.Toplevel):
             self.current_password = password
             self._editable = True
             max_attempts = self._get_max_attempts()
-            self._remaining_attempts = max_attempts
-            self.verify_status_var.set(f"✓ 密码验证通过，可以编辑  剩余校验次数: {max_attempts}/{max_attempts}")
+            if max_attempts > 0:
+                self._remaining_attempts = max_attempts
+                self.verify_status_var.set(f"✓ 安全码验证通过，可以编辑  剩余校验次数: {max_attempts}/{max_attempts}")
+            else:
+                self._remaining_attempts = -1
+                self.verify_status_var.set("✓ 安全码验证通过，可以编辑")
             self.verify_status_label.config(foreground="green")
             self.modified_var.set("")
             if hasattr(self, 'change_pwd_btn'):
                 self.change_pwd_btn.config(state='normal')
             if self.log_callback:
-                self.log_callback("卡片密码验证通过", "SUCCESS")
+                self.log_callback("卡片安全码验证通过", "SUCCESS")
         else:
             self.password_verified = False
             self.current_password = None
@@ -483,15 +493,13 @@ class CardDataEditor(tk.Toplevel):
     def _write_changes(self):
         if not self._editable:
             card_type = self.card_data.card_type
-            if card_type in (CardType.SLE4442, CardType.SLE4428):
-                messagebox.showwarning("需要验证", "请先验证卡片密码才能写入数据", parent=self)
-                return
-            elif card_type in (CardType.MIFARE_S50, CardType.MIFARE_S70):
-                messagebox.showwarning("需要密钥", "请先输入 Mifare 密钥才能写入数据", parent=self)
-                return
+            if card_type in PASSWORD_CARD_TYPES:
+                messagebox.showwarning("需要验证", "请先验证卡片安全码才能写入数据", parent=self)
+            elif card_type in CRYPTO_AUTH_CARD_TYPES:
+                messagebox.showwarning("暂不支持", "该卡需加密认证（挑战-应答），当前版本不支持安全区写入", parent=self)
             else:
                 messagebox.showwarning("不可编辑", "当前卡片类型不支持写入", parent=self)
-                return
+            return
 
         if not self._check_modified():
             messagebox.showinfo("提示", "数据未修改，无需写入", parent=self)
@@ -509,13 +517,17 @@ class CardDataEditor(tk.Toplevel):
         edited_main = self._collect_edited_data('main')
         edited_protection = self._collect_edited_data('protection')
 
+        # 主存储器按卡片页大小分块写入，避免跨 EEPROM 页边界（AT24C 系列页大小 8/16/32）。
+        mem_info = self.card_data.memory_info
+        main_chunk = mem_info.page_size if mem_info and mem_info.page_size > 1 else 32
+
         errors = []
 
         def write_thread():
             if edited_main != self._original_main:
-                for offset in range(0, len(edited_main), 32):
-                    old_chunk = self._original_main[offset:offset + 32]
-                    new_chunk = edited_main[offset:offset + 32]
+                for offset in range(0, len(edited_main), main_chunk):
+                    old_chunk = self._original_main[offset:offset + main_chunk]
+                    new_chunk = edited_main[offset:offset + main_chunk]
                     if old_chunk != new_chunk:
                         st = self.detector.write_card_data(offset, bytes(new_chunk))
                         if st != IC_OK:

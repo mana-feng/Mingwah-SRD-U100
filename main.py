@@ -8,6 +8,8 @@ import sys
 import argparse
 from pathlib import Path
 
+from src.core.constants import VERSION_STRING
+
 
 def run_gui():
     """运行 GUI 版本"""
@@ -41,7 +43,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="MWIC Python 1.0.0"
+        version=f"MWIC Python {VERSION_STRING}"
     )
     
     args = parser.parse_args()

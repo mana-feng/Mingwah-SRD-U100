@@ -28,15 +28,10 @@
 
 ## 安装
 
-```bash
-pip install -r requirements.txt
-```
+本程序仅使用 Python 标准库（`ctypes`、`tkinter`），**无需安装任何第三方依赖**，克隆后即可直接运行。
 
-依赖项：
-
-- `pyserial>=3.5`
-
-> tkinter 通常随 Python 自带，无需单独安装。
+> - tkinter 通常随 Python 自带；若提示缺少 tkinter，请安装带 Tk 支持的 Python 发行版。
+> - `Mwic_32.dll` 已随仓库提供，需与 `main.py` 位于同一目录。
 
 ## 使用方法
 
@@ -76,18 +71,20 @@ python main.py --version
 Mingwah-SRD-U100/
 ├── main.py                  # 主入口（GUI/CLI 切换）
 ├── run_gui.py               # GUI 快速启动脚本
-├── requirements.txt         # 依赖列表
+├── requirements.txt         # 依赖说明（无第三方依赖）
+├── Mwic_32.dll              # 明华澳汉官方 32 位驱动库
 ├── src/
 │   ├── core/
 │   │   ├── constants.py     # 常量定义（错误码、端口、波特率等）
 │   │   ├── types.py         # 类型定义（CardType、DeviceStatus 等）
 │   │   ├── mwic.py          # MWIC_32.dll 封装（ctypes 调用）
-│   │   └── detector.py      # 自动卡片检测与数据读写
-│   ├── gui/
-│   │   ├── app.py           # 主 GUI 窗口
-│   │   ├── card_editor.py   # 卡片数据十六进制编辑器
-│   │   └── password_dialogs.py  # 密码验证/修改对话框
-│   └── protocols/
+│   │   ├── card_ops.py      # 卡片读写操作（CardOperationsMixin）
+│   │   └── detector.py      # 自动卡片检测
+│   └── gui/
+│       ├── app.py           # 主 GUI 窗口
+│       ├── card_editor.py   # 卡片数据十六进制编辑器
+│       ├── cpu_card_editor.py   # CPU 卡 APDU 命令编辑器
+│       └── password_dialogs.py  # 密码验证/修改对话框
 └── LICENSE                  # AGPL-3.0
 ```
 

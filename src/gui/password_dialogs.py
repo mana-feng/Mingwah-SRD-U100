@@ -15,6 +15,8 @@ class PasswordDialog(tk.Toplevel):
         self.result = None
         self.card_type = card_type
         self.remaining_attempts = remaining_attempts
+        # SLE 卡 PSC 长度固定，用定长字节框；AT88 安全码长度随卡而异，用自由输入。
+        self.freeform = card_type not in (CardType.SLE4442, CardType.SLE4428)
 
         if card_type == CardType.SLE4442:
             self.title("SLE4442 密码验证")
@@ -25,9 +27,9 @@ class PasswordDialog(tk.Toplevel):
             self.psc_length = 2
             self._label_text = "请输入 SLE4428 PSC 密码（2 字节十六进制）："
         else:
-            self.title("密码验证")
+            self.title(f"{card_type.name} 安全码验证")
             self.psc_length = 3
-            self._label_text = "请输入密码（十六进制）："
+            self._label_text = "请输入安全码（十六进制，按卡片实际长度输入）："
 
         self.resizable(False, False)
         self.transient(parent)
@@ -37,12 +39,33 @@ class PasswordDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
         self.geometry(f"+{parent.winfo_rootx() + 200}+{parent.winfo_rooty() + 200}")
-        if hasattr(self, 'byte_entries') and self.byte_entries:
+        if self.freeform:
+            if hasattr(self, 'hex_entry'):
+                self.hex_entry.focus_set()
+        elif hasattr(self, 'byte_entries') and self.byte_entries:
             self.byte_entries[0].focus_set()
 
     def _create_widgets(self):
         frame = ttk.Frame(self, padding="20")
         frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        if self.freeform:
+            ttk.Label(frame, text=self._label_text, wraplength=340).grid(
+                row=0, column=0, pady=(0, 10), sticky=tk.W
+            )
+            self.hex_var = tk.StringVar()
+            self.hex_entry = ttk.Entry(frame, textvariable=self.hex_var, width=32, font=('Consolas', 11))
+            self.hex_entry.grid(row=1, column=0, pady=5, sticky=tk.W)
+            ttk.Label(frame, text="偶数位十六进制，例如 3 字节写 AABBCC", foreground="gray", wraplength=340).grid(
+                row=2, column=0, pady=(0, 5), sticky=tk.W
+            )
+            ttk.Label(frame, text="⚠ AT88 卡有口令尝试计数器，连续输错会永久锁死，请确认后再验证！",
+                      foreground="red", wraplength=340).grid(row=3, column=0, pady=(0, 10), sticky=tk.W)
+            btn_frame = ttk.Frame(frame)
+            btn_frame.grid(row=4, column=0, pady=(5, 0), sticky=tk.W)
+            ttk.Button(btn_frame, text="验证", command=self._on_ok, width=10).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btn_frame, text="取消", command=self._on_cancel, width=10).pack(side=tk.LEFT, padx=5)
+            return
 
         ttk.Label(frame, text=self._label_text, wraplength=300).grid(
             row=0, column=0, columnspan=self.psc_length, pady=(0, 10), sticky=tk.W
@@ -97,6 +120,21 @@ class PasswordDialog(tk.Toplevel):
         ttk.Button(btn_frame, text="取消", command=self._on_cancel, width=10).pack(side=tk.LEFT, padx=5)
 
     def _on_ok(self):
+        if self.freeform:
+            hex_str = self.hex_var.get().strip().replace(' ', '')
+            if not hex_str:
+                messagebox.showerror("错误", "安全码不能为空", parent=self)
+                return
+            if len(hex_str) % 2 != 0:
+                messagebox.showerror("错误", "十六进制位数必须为偶数（每字节 2 位）", parent=self)
+                return
+            try:
+                self.result = bytes.fromhex(hex_str)
+            except ValueError:
+                messagebox.showerror("错误", "无效的十六进制格式", parent=self)
+                return
+            self.destroy()
+            return
         try:
             hex_bytes = []
             for i, var in enumerate(self.byte_vars):
@@ -109,7 +147,7 @@ class PasswordDialog(tk.Toplevel):
                     messagebox.showerror("错误", f"第 {i+1} 个字节超出范围 (00-FF)", parent=self)
                     return
                 hex_bytes.append(byte_val)
-            
+
             self.result = bytes(hex_bytes)
             self.destroy()
         except ValueError:
@@ -186,6 +224,7 @@ class ChangePasswordDialog(tk.Toplevel):
         super().__init__(parent)
         self.result = None
         self.card_type = card_type
+        self.freeform = card_type not in (CardType.SLE4442, CardType.SLE4428)
 
         if card_type == CardType.SLE4442:
             self.title("修改 SLE4442 密码")
@@ -196,9 +235,9 @@ class ChangePasswordDialog(tk.Toplevel):
             self.psc_length = 2
             self._label_text = "请输入新的 SLE4428 PSC 密码（2 字节十六进制）："
         else:
-            self.title("修改密码")
+            self.title(f"修改 {card_type.name} 安全码")
             self.psc_length = 3
-            self._label_text = "请输入新密码（十六进制）："
+            self._label_text = "请输入新的安全码（十六进制，长度需与原安全码一致）："
 
         self.resizable(False, False)
         self.transient(parent)
@@ -208,12 +247,34 @@ class ChangePasswordDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
         self.geometry(f"+{parent.winfo_rootx() + 200}+{parent.winfo_rooty() + 200}")
-        if hasattr(self, 'new_byte_entries') and self.new_byte_entries:
+        if self.freeform:
+            if hasattr(self, 'new_hex_entry'):
+                self.new_hex_entry.focus_set()
+        elif hasattr(self, 'new_byte_entries') and self.new_byte_entries:
             self.new_byte_entries[0].focus_set()
 
     def _create_widgets(self):
         frame = ttk.Frame(self, padding="20")
         frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        if self.freeform:
+            ttk.Label(frame, text=self._label_text, wraplength=340).grid(
+                row=0, column=0, pady=(0, 10), sticky=tk.W
+            )
+            self.new_hex_var = tk.StringVar()
+            self.new_hex_entry = ttk.Entry(frame, textvariable=self.new_hex_var, width=32, font=('Consolas', 11))
+            self.new_hex_entry.grid(row=1, column=0, pady=5, sticky=tk.W)
+            ttk.Label(frame, text="偶数位十六进制，例如 3 字节写 AABBCC", foreground="gray", wraplength=340).grid(
+                row=2, column=0, pady=(0, 10), sticky=tk.W
+            )
+            ttk.Label(frame, text="⚠ 修改后请牢记新安全码，忘记将无法恢复！", foreground="red", wraplength=340).grid(
+                row=3, column=0, pady=(0, 10), sticky=tk.W
+            )
+            btn_frame = ttk.Frame(frame)
+            btn_frame.grid(row=4, column=0, pady=(5, 0), sticky=tk.W)
+            ttk.Button(btn_frame, text="确认修改", command=self._on_ok, width=10).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btn_frame, text="取消", command=self._on_cancel, width=10).pack(side=tk.LEFT, padx=5)
+            return
 
         ttk.Label(frame, text=self._label_text, wraplength=300).grid(
             row=0, column=0, columnspan=self.psc_length, pady=(0, 10), sticky=tk.W
@@ -329,6 +390,21 @@ class ChangePasswordDialog(tk.Toplevel):
             return None
 
     def _on_ok(self):
+        if self.freeform:
+            hex_str = self.new_hex_var.get().strip().replace(' ', '')
+            if not hex_str:
+                messagebox.showerror("错误", "安全码不能为空", parent=self)
+                return
+            if len(hex_str) % 2 != 0:
+                messagebox.showerror("错误", "十六进制位数必须为偶数（每字节 2 位）", parent=self)
+                return
+            try:
+                self.result = bytes.fromhex(hex_str)
+            except ValueError:
+                messagebox.showerror("错误", "无效的十六进制格式", parent=self)
+                return
+            self.destroy()
+            return
         new_bytes = self._get_bytes_from_vars(self.new_byte_vars)
         if new_bytes is None:
             return

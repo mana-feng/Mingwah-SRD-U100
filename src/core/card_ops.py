@@ -16,47 +16,6 @@ from .types import CardType, CardFullData, get_card_memory_info
 
 class CardOperationsMixin:
 
-    def read_card_data(self, offset: int = 0, length: int = 32) -> tuple:
-        if not self.status.connected or self.status.device_handle <= 0:
-            return (IC_ERR_NO_CARD, b'')
-        if not self.status.card_type:
-            return (IC_ERR_NO_CARD, b'')
-
-        try:
-            card_type = self.status.card_type
-
-            if card_type in (CardType.AT24C01A, CardType.AT24C02, CardType.AT24C04,
-                             CardType.AT24C08, CardType.AT24C16, CardType.AT24C32,
-                             CardType.AT24C64):
-                size_map = {
-                    CardType.AT24C01A: '01a', CardType.AT24C02: '02',
-                    CardType.AT24C04: '04', CardType.AT24C08: '08',
-                    CardType.AT24C16: '16', CardType.AT24C32: '32',
-                    CardType.AT24C64: '64',
-                }
-                return self.mwic.srd_24c(self.status.device_handle, size_map.get(card_type, '16'), offset, length)
-
-            elif card_type in (CardType.SLE4442,):
-                return self.mwic.srd_4442(self.status.device_handle, offset, length)
-
-            elif card_type in (CardType.SLE4428, CardType.SLE4418):
-                return self.mwic.srd_4428(self.status.device_handle, offset, length)
-
-            elif card_type in (CardType.CARD4404, CardType.CARD4406, CardType.CARD4432):
-                srd_map = {
-                    CardType.CARD4404: 'srd_4404',
-                    CardType.CARD4406: 'srd_4406',
-                    CardType.CARD4432: 'srd_4432',
-                }
-                srd_fn = getattr(self.mwic, srd_map.get(card_type, ''), None)
-                if srd_fn:
-                    return srd_fn(self.status.device_handle, offset, length)
-
-            return (IC_ERR_NO_CARD, b'')
-        except Exception as e:
-            print(f"读取卡片数据失败：{e}")
-            return (IC_ERR_NO_CARD, b'')
-
     def read_card_full_data(self) -> CardFullData:
         result = CardFullData(card_type=self.status.card_type or CardType.UNKNOWN)
 
@@ -144,16 +103,14 @@ class CardOperationsMixin:
             remaining = total_size - offset
             read_len = min(chunk_size, remaining)
             st, chunk = read_func(offset, read_len)
-            if st == IC_OK and len(chunk) >= 1:
-                data.extend(chunk)
-                offset += read_len
-            elif len(chunk) >= 1:
-                data.extend(chunk)
-                offset += read_len
-            else:
-                if offset > 0:
-                    break
-                return b''
+            # 底层缓冲区始终返回 read_len 长度（读卡失败时也是全 0），
+            # 因此只能依据返回码 st 判断成败，不能用 len(chunk) 判断。
+            if st != IC_OK or not chunk:
+                break
+            data.extend(chunk)
+            offset += len(chunk)
+            if len(chunk) < read_len:
+                break
         return bytes(data[:total_size])
 
     def _read_24c_full(self, card_type: CardType) -> bytes:
@@ -185,14 +142,14 @@ class CardOperationsMixin:
     def _read_sle4442_protection(self) -> bytes:
         handle = self.status.device_handle
         st, data = self.mwic.prd_4442(handle, SLE4442_PROTECTION_SIZE)
-        if len(data) >= 1:
+        if st == IC_OK and data:
             return data
         st, data = self.mwic.srd_4442(handle, SLE4442_MAIN_SIZE + SLE4442_SECURITY_SIZE, SLE4442_PROTECTION_SIZE)
-        if len(data) >= 1:
+        if st == IC_OK and data:
             return data
         try:
             st, data = self.mwic.srd_4442(handle, 0, SLE4442_MAIN_SIZE + SLE4442_SECURITY_SIZE + SLE4442_PROTECTION_SIZE)
-            if len(data) > SLE4442_MAIN_SIZE + SLE4442_SECURITY_SIZE:
+            if st == IC_OK and len(data) > SLE4442_MAIN_SIZE + SLE4442_SECURITY_SIZE:
                 return data[SLE4442_MAIN_SIZE + SLE4442_SECURITY_SIZE:]
         except Exception:
             pass
@@ -201,14 +158,14 @@ class CardOperationsMixin:
     def _read_sle4442_security(self) -> bytes:
         handle = self.status.device_handle
         st, data = self.mwic.rsc_4442(handle, SLE4442_SECURITY_SIZE)
-        if len(data) >= 1:
+        if st == IC_OK and data:
             return data
         st, data = self.mwic.srd_4442(handle, SLE4442_MAIN_SIZE, SLE4442_SECURITY_SIZE)
-        if len(data) >= 1:
+        if st == IC_OK and data:
             return data
         try:
             st, data = self.mwic.srd_4442(handle, 0, SLE4442_MAIN_SIZE + SLE4442_SECURITY_SIZE)
-            if len(data) > SLE4442_MAIN_SIZE:
+            if st == IC_OK and len(data) > SLE4442_MAIN_SIZE:
                 return data[SLE4442_MAIN_SIZE:]
         except Exception:
             pass
@@ -246,14 +203,14 @@ class CardOperationsMixin:
     def _read_sle4428_security(self) -> bytes:
         handle = self.status.device_handle
         st, data = self.mwic.rsc_4428(handle, SLE4428_SECURITY_SIZE)
-        if len(data) >= 1:
+        if st == IC_OK and data:
             return data
         st, data = self.mwic.srd_4428(handle, SLE4428_MAIN_SIZE, SLE4428_SECURITY_SIZE)
-        if len(data) >= 1:
+        if st == IC_OK and data:
             return data
         try:
             st, data = self.mwic.srd_4428(handle, 0, SLE4428_MAIN_SIZE + SLE4428_SECURITY_SIZE)
-            if len(data) > SLE4428_MAIN_SIZE:
+            if st == IC_OK and len(data) > SLE4428_MAIN_SIZE:
                 return data[SLE4428_MAIN_SIZE:]
         except Exception:
             pass
@@ -328,7 +285,7 @@ class CardOperationsMixin:
     def _read_93c(self, total_size: int, read_func_name: str) -> bytes:
         return self._read_44_style(total_size, read_func_name)
 
-    def verify_card_password(self, password: bytes) -> bool:
+    def verify_card_password(self, password: bytes, zone: int = 0) -> bool:
         if not self.status.connected or self.status.device_handle <= 0:
             return False
         if not self.status.card_type:
@@ -342,6 +299,12 @@ class CardOperationsMixin:
                 return self.mwic.csc_4442(handle, len(password), password) == IC_OK
             elif card_type == CardType.SLE4428:
                 return self.mwic.csc_4428(handle, len(password), password) == IC_OK
+            elif card_type == CardType.AT88C102:
+                return self.mwic.csc_at88c102(handle, password) == IC_OK
+            elif card_type == CardType.AT88C1604:
+                return self.mwic.csc_at88sc1604(handle, zone, password) == IC_OK
+            elif card_type == CardType.AT88SC1604B:
+                return self.mwic.csc_at88sc1604b(handle, zone, password) == IC_OK
             elif card_type == CardType.CPU_CARD:
                 return True
             return True
@@ -349,7 +312,7 @@ class CardOperationsMixin:
             print(f"密码验证失败：{e}")
             return False
 
-    def change_card_password(self, current_password: bytes, new_password: bytes) -> bool:
+    def change_card_password(self, current_password: bytes, new_password: bytes, zone: int = 0) -> bool:
         if not self.status.connected or self.status.device_handle <= 0:
             return False
         if not self.status.card_type:
@@ -369,6 +332,18 @@ class CardOperationsMixin:
                 if st != IC_OK:
                     return False
                 return self.mwic.wsc_4428(handle, new_password) == IC_OK
+            elif card_type == CardType.AT88C102:
+                if self.mwic.csc_at88c102(handle, current_password) != IC_OK:
+                    return False
+                return self.mwic.wsc_at88c102(handle, new_password) == IC_OK
+            elif card_type == CardType.AT88C1604:
+                if self.mwic.csc_at88sc1604(handle, zone, current_password) != IC_OK:
+                    return False
+                return self.mwic.wsc_at88sc1604(handle, zone, new_password) == IC_OK
+            elif card_type == CardType.AT88SC1604B:
+                if self.mwic.csc_at88sc1604b(handle, zone, current_password) != IC_OK:
+                    return False
+                return self.mwic.wsc_at88sc1604b(handle, zone, new_password) == IC_OK
             return False
         except Exception as e:
             print(f"修改密码异常：{e}")
@@ -455,7 +430,9 @@ class CardOperationsMixin:
     def card_needs_password(self) -> bool:
         if not self.status.card_type:
             return False
-        return self.status.card_type in (CardType.SLE4442, CardType.SLE4428)
+        return self.status.card_type in (CardType.SLE4442, CardType.SLE4428,
+                                         CardType.AT88C102, CardType.AT88C1604,
+                                         CardType.AT88SC1604B)
 
     def _check_protection_before_write(self, card_type: CardType, offset: int, length: int) -> bool:
         try:
@@ -488,24 +465,24 @@ class CardOperationsMixin:
                 if st == IC_OK and 0 <= counter <= 3:
                     return counter
                 st, data = self.mwic.rsc_4442(handle, SLE4442_SECURITY_SIZE)
-                if len(data) >= 1 and data[0] != 0:
+                if st == IC_OK and data and data[0] != 0:
                     return bin(data[0] & 0x07).count('1')
                 st, data = self.mwic.srd_4442(handle, SLE4442_MAIN_SIZE, SLE4442_SECURITY_SIZE)
-                if len(data) >= 1 and data[0] != 0:
+                if st == IC_OK and data and data[0] != 0:
                     return bin(data[0] & 0x07).count('1')
-                return 0 if len(data) >= 1 and data[0] == 0 else -1
+                return 0 if st == IC_OK and data and data[0] == 0 else -1
 
             elif card_type == CardType.SLE4428:
                 st, counter = self.mwic.rsct_4428(handle)
                 if st == IC_OK and 0 <= counter <= 8:
                     return counter
                 st, data = self.mwic.rsc_4428(handle, SLE4428_SECURITY_SIZE)
-                if len(data) >= 1 and data[0] != 0:
+                if st == IC_OK and data and data[0] != 0:
                     return bin(data[0] & 0xFF).count('1')
                 st, data = self.mwic.srd_4428(handle, SLE4428_MAIN_SIZE, SLE4428_SECURITY_SIZE)
-                if len(data) >= 1 and data[0] != 0:
+                if st == IC_OK and data and data[0] != 0:
                     return bin(data[0] & 0xFF).count('1')
-                return 0 if len(data) >= 1 and data[0] == 0 else -1
+                return 0 if st == IC_OK and data and data[0] == 0 else -1
 
             return -1
         except Exception as e:
@@ -524,14 +501,14 @@ class CardOperationsMixin:
         try:
             if card_type == CardType.SLE4442:
                 st, data = self.mwic.rsc_4442(handle, SLE4442_SECURITY_SIZE)
-                if len(data) >= 1:
+                if st == IC_OK and data:
                     return data
                 st, data = self.mwic.srd_4442(handle, SLE4442_MAIN_SIZE, SLE4442_SECURITY_SIZE)
-                if len(data) >= 1:
+                if st == IC_OK and data:
                     return data
                 try:
                     st, data = self.mwic.srd_4442(handle, 0, SLE4442_MAIN_SIZE + SLE4442_SECURITY_SIZE)
-                    if len(data) > SLE4442_MAIN_SIZE:
+                    if st == IC_OK and len(data) > SLE4442_MAIN_SIZE:
                         return data[SLE4442_MAIN_SIZE:]
                 except Exception:
                     pass
@@ -539,14 +516,14 @@ class CardOperationsMixin:
 
             elif card_type == CardType.SLE4428:
                 st, data = self.mwic.rsc_4428(handle, SLE4428_SECURITY_SIZE)
-                if len(data) >= 1:
+                if st == IC_OK and data:
                     return data
                 st, data = self.mwic.srd_4428(handle, SLE4428_MAIN_SIZE, SLE4428_SECURITY_SIZE)
-                if len(data) >= 1:
+                if st == IC_OK and data:
                     return data
                 try:
                     st, data = self.mwic.srd_4428(handle, 0, SLE4428_MAIN_SIZE + SLE4428_SECURITY_SIZE)
-                    if len(data) > SLE4428_MAIN_SIZE:
+                    if st == IC_OK and len(data) > SLE4428_MAIN_SIZE:
                         return data[SLE4428_MAIN_SIZE:]
                 except Exception:
                     pass
