@@ -150,9 +150,9 @@ CARD_MEMORY_MAP = {
     ),
     CardType.SLE4442: CardMemoryInfo(
         card_type=CardType.SLE4442, total_bytes=256, page_size=1,
-        has_protection=True, protection_bytes=32,
+        has_protection=True, protection_bytes=4,
         has_security_memory=True, security_memory_size=4,
-        description="SLE4442 - 256字节 + 32字节保护位 + 4字节安全存储器"
+        description="SLE4442 - 256字节 + 4字节保护位 + 4字节安全存储器"
     ),
     CardType.SLE4428: CardMemoryInfo(
         card_type=CardType.SLE4428, total_bytes=1024, page_size=1,

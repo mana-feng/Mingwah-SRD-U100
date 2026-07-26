@@ -166,12 +166,11 @@ class MWIC32:
             elif name == 'cpu_protocol':
                 func.restype = ctypes.c_int16
                 func.argtypes = [ctypes.c_long, ctypes.c_int16]
-            elif name == 'ic_encrypt':
+            elif name in ('ic_encrypt', 'ic_decrypt'):
+                # Mwic_32.h: ic_encrypt(char *key, char *src, unsigned short len, char *dest)
+                # —— 无 handle，为 8 字节 DES 运算（官方 demo 用 8 字节密钥/数据）。
                 func.restype = ctypes.c_int16
-                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_int16, ctypes.c_char_p]
-            elif name == 'ic_decrypt':
-                func.restype = ctypes.c_int16
-                func.argtypes = [ctypes.c_long, ctypes.c_int16, ctypes.c_char_p, ctypes.c_int16, ctypes.c_char_p]
+                func.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ushort, ctypes.c_char_p]
             self._func_cache[name] = func
         return self._func_cache[name]
 
@@ -453,24 +452,17 @@ class MWIC32:
                     result = func(args[0], protocol)
                     return {"result": result}
 
-                elif func_name == 'ic_encrypt':
-                    key_type = args[1] if len(args) > 1 else 0
-                    data_hex = args[2] if len(args) > 2 else ''
+                elif func_name in ('ic_encrypt', 'ic_decrypt'):
+                    # ic_encrypt(key, src, len, dest)：无 handle
+                    key_hex = args[0] if len(args) > 0 else ''
+                    data_hex = args[1] if len(args) > 1 else ''
+                    key_bytes = bytes.fromhex(key_hex)
                     data_bytes = bytes.fromhex(data_hex)
                     length = len(data_bytes)
-                    in_buf = ctypes.create_string_buffer(data_bytes, length)
-                    out_buf = ctypes.create_string_buffer(length)
-                    result = func(args[0], key_type, in_buf, length, out_buf)
-                    return {"result": result, "data": out_buf.raw[:length].hex()}
-
-                elif func_name == 'ic_decrypt':
-                    key_type = args[1] if len(args) > 1 else 0
-                    data_hex = args[2] if len(args) > 2 else ''
-                    data_bytes = bytes.fromhex(data_hex)
-                    length = len(data_bytes)
-                    in_buf = ctypes.create_string_buffer(data_bytes, length)
-                    out_buf = ctypes.create_string_buffer(length)
-                    result = func(args[0], key_type, in_buf, length, out_buf)
+                    key_buf = ctypes.create_string_buffer(key_bytes, len(key_bytes) + 1)
+                    in_buf = ctypes.create_string_buffer(data_bytes, length + 1)
+                    out_buf = ctypes.create_string_buffer(length + 1)
+                    result = func(key_buf, in_buf, length, out_buf)
                     return {"result": result, "data": out_buf.raw[:length].hex()}
 
                 else:
@@ -887,15 +879,16 @@ class MWIC32:
             return IC_ERR
         return result.get('result', IC_ERR)
 
-    def ic_encrypt(self, handle: int, key_type: int, data: bytes) -> Tuple[int, bytes]:
-        result = self._call_dll('ic_encrypt', [handle, key_type, data.hex()])
+    def ic_encrypt(self, key: bytes, data: bytes) -> Tuple[int, bytes]:
+        # DES 加密：key/data 通常各 8 字节（官方 demo 用法）
+        result = self._call_dll('ic_encrypt', [key.hex(), data.hex()])
         if 'error' in result:
             return IC_ERR, b''
         data_hex = result.get('data', '')
         return result.get('result', IC_ERR), bytes.fromhex(data_hex) if data_hex else b''
 
-    def ic_decrypt(self, handle: int, key_type: int, data: bytes) -> Tuple[int, bytes]:
-        result = self._call_dll('ic_decrypt', [handle, key_type, data.hex()])
+    def ic_decrypt(self, key: bytes, data: bytes) -> Tuple[int, bytes]:
+        result = self._call_dll('ic_decrypt', [key.hex(), data.hex()])
         if 'error' in result:
             return IC_ERR, b''
         data_hex = result.get('data', '')
